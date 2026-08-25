@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The win marquee uses an isolated conformance (`View, @MainActor Animatable`), which is
+      # Swift 6.2. Failing here with a clear message beats a confusing compile error later.
+      - name: Check toolchain
+        run: |
+          swift --version
+          version=$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          major=${version%%.*}
+          rest=${version#*.}
+          minor=${rest%%.*}
+          if [ "$major" -lt 6 ] || { [ "$major" -eq 6 ] && [ "$minor" -lt 2 ]; }; then
+            echo "::error::Swift 6.2+ required for isolated conformances; runner has $version."
+            exit 1
+          fi
+
+      - name: Build
+        run: swift build --build-tests
+
+      - name: Test
+        run: swift test
+
+      # Cheap smoke test: the bundle assembles, the icon lands, and the version is stamped.
+      - name: Package the app
+        run: |
+          ./Scripts/make_app.sh
+          version=$(tr -d '[:space:]' < VERSION)
+          stamped=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+            DesktopCasino.app/Contents/Info.plist)
+          if [ "$stamped" != "$version" ]; then
+            echo "::error::Bundle says $stamped but VERSION says $version."
+            exit 1
+          fi
+          test -f DesktopCasino.app/Contents/Resources/AppIcon.icns \
+            || echo "::warning::No AppIcon.icns in the bundle."
+          echo "Packaged $version"
