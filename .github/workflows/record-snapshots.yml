@@ -1,0 +1,42 @@
+# TEMPORARY. Records the reference PNGs for the new window snapshots on a macOS runner and
+# commits them back to the branch, because the session that wrote the tests has no Mac to
+# render on. Deleted again once the references are in.
+name: Record snapshots
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.head_ref == 'claude/window-snapshot-tests-ekhw2q'
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Build
+        run: swift build --build-tests
+
+      # A missing reference is written on first run and reported as a failure, so this records
+      # only what is new. Existing references are still compared, which is the point: if they
+      # no longer match on this runner, that shows up here rather than being silently rewritten.
+      - name: Test
+        run: swift test || true
+
+      - name: Commit any newly recorded references
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Tests/CasinoKitTests/__Snapshots__
+          if git diff --cached --quiet; then
+            echo "Nothing new to record."
+            exit 0
+          fi
+          git status --short --cached
+          git commit -m "Record window snapshot references on macos-latest"
+          git push origin HEAD:${{ github.head_ref }}
