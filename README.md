@@ -385,6 +385,30 @@ display refresh for as long as it is mounted, so leaving the marquee up until th
 one lucky spin left an idle desktop widget animating forever. For an always-on widget that is the
 difference between free and a battery cost. It is skipped entirely when Reduce Motion is on.
 
+## Contributing
+
+`main` is protected: changes go through a pull request, including mine.
+
+```sh
+git config core.hooksPath .githooks   # once per clone: blocks direct pushes to main
+git switch -c my-change
+git push -u origin my-change
+gh pr create --fill
+```
+
+CI runs on every PR — build, 22 tests, and a packaging smoke check that the bundle assembles with
+the version stamped and the icon in place. It is a required check, so a red PR cannot merge. No
+approvals are required, so you can merge your own work once CI is green.
+
+Two layers enforce this, because one of them does not work yet:
+
+- **`.githooks/pre-push`** refuses a push whose target is `refs/heads/main`. Works today, but it
+  only binds the clone that enables it and `--no-verify` walks straight past it.
+- **`Scripts/protect_main.sh`** applies a real server-side ruleset — no direct pushes, no
+  force-pushes, no deletion, CI required, and no bypass for admins. GitHub does not offer branch
+  protection on free *private* repositories, so it returns 403 until the repo is public. Run it
+  the moment you flip visibility.
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,34 @@
+#!/bin/bash
+# Refuses a direct push to main, so changes go through a pull request.
+#
+# This is a local stand-in for server-side branch protection, which GitHub does not offer on free
+# private repositories. Once the repo is public, run Scripts/protect_main.sh and the server will
+# enforce this for real — a local hook only binds this clone, and `--no-verify` skips it.
+#
+# Enable with:  git config core.hooksPath .githooks
+set -euo pipefail
+
+protected="refs/heads/main"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "$protected" ]; then
+    cat >&2 <<'MESSAGE'
+
+  Direct push to main is blocked.
+
+  Open a pull request instead:
+
+      git switch -c my-change
+      git push -u origin my-change
+      gh pr create --fill
+
+  If you genuinely need to bypass this (initial setup, emergency), use:
+
+      git push --no-verify
+
+MESSAGE
+    exit 1
+  fi
+done
+
+exit 0
