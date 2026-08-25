@@ -1,0 +1,4 @@
+.build/
+DesktopCasino.app/
+.DS_Store
+dist/

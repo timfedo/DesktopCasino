@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The win marquee uses an isolated conformance (`View, @MainActor Animatable`), which is
+      # Swift 6.2. Failing here with a clear message beats a confusing compile error later.
+      - name: Check toolchain
+        run: |
+          swift --version
+          version=$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          major=${version%%.*}
+          rest=${version#*.}
+          minor=${rest%%.*}
+          if [ "$major" -lt 6 ] || { [ "$major" -eq 6 ] && [ "$minor" -lt 2 ]; }; then
+            echo "::error::Swift 6.2+ required for isolated conformances; runner has $version."
+            echo "::error::Pin a newer Xcode with 'sudo xcode-select -s /Applications/Xcode_<v>.app'."
+            exit 1
+          fi
+
+      - name: Check the tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file=$(tr -d '[:space:]' < VERSION)
+          if [ "$tag" != "$file" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION ($file)."
+            exit 1
+          fi
+
+      - name: Test
+        run: swift test
+
+      - name: Build DMG
+        run: ./Scripts/make_dmg.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DesktopCasino-dmg
+          path: dist/*
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "DesktopCasino $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes-file - <<'NOTES'
+          A slot machine that lives on the macOS desktop.
+
+          ## Install
+
+          1. Open the DMG and drag **DesktopCasino** to Applications. This part never complains.
+          2. Launch it. macOS blocks it: *"Apple could not verify 'DesktopCasino' is free of malware."*
+             The only buttons are Move to Trash and Done — there is no Open button.
+          3. **System Settings -> Privacy & Security**, scroll to the bottom, click **Open Anyway**,
+             confirm, and authenticate.
+          4. Subsequent launches are silent.
+
+          This app is ad-hoc signed rather than notarised (notarisation needs a paid Apple
+          Developer ID). Control-click -> Open does **not** work — Apple removed that override in
+          macOS 15.
+
+          To skip the prompt entirely, clear the quarantine flag before first launch:
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/DesktopCasino.app
+          ```
+
+          Requires macOS 14 or later.
+          NOTES
