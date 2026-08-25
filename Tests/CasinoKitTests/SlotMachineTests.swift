@@ -66,8 +66,13 @@ struct SlotMachineTests {
         let opening = machine.credits
         machine.spin()
 
-        // Resolution is scheduled ~2.3s out; wait past it rather than reaching into the timing.
-        try await Task.sleep(for: .seconds(3))
+        // Poll rather than sleeping a fixed interval. Resolution is scheduled ~2.3s out on the
+        // main actor, and the snapshot tests run in parallel doing heavy main-actor rendering —
+        // a fixed 3s wait raced that contention and failed intermittently.
+        let deadline = Date().addingTimeInterval(30)
+        while machine.isSpinning, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
 
         #expect(!machine.isSpinning)
         #expect(machine.spinCount == 1)
