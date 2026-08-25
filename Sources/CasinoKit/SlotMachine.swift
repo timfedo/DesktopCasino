@@ -137,18 +137,8 @@ public final class SlotMachine {
     }
 
     private func resolve(_ landings: [Int]) {
-        let result = landings.map { Reel.strip[$0] }
-        var payout = 0
-
-        if result[0] == result[1], result[1] == result[2] {
-            payout = bet * result[0].tripleMultiplier
-            outcome = .triple(result[0])
-        } else if let matched = pair(in: result) {
-            payout = bet * matched.pairMultiplier
-            outcome = .pair(matched)
-        } else {
-            outcome = .nothing
-        }
+        let (result, payout) = Self.score(landings, stake: bet)
+        outcome = result
 
         credits += payout
         lastWin = payout
@@ -162,8 +152,29 @@ public final class SlotMachine {
         save()
     }
 
-    private func pair(in result: [Symbol]) -> Symbol? {
-        result.first { symbol in result.filter { $0 == symbol }.count == 2 }
+    /// What a set of strip landings pays at a given stake.
+    ///
+    /// Pure and static so that a spin resolving for real and a machine staged for a render go
+    /// through the same table — a second copy of this arithmetic would let the symbols on the
+    /// reels drift out of step with the line printed underneath them.
+    static func score(_ landings: [Int], stake: Int) -> (outcome: Outcome, payout: Int) {
+        let result = landings.map { Reel.strip[wrap($0)] }
+
+        if result[0] == result[1], result[1] == result[2] {
+            return (.triple(result[0]), stake * result[0].tripleMultiplier)
+        }
+        if let matched = result.first(where: { symbol in
+            result.filter { $0 == symbol }.count == 2
+        }) {
+            return (.pair(matched), stake * matched.pairMultiplier)
+        }
+        return (.nothing, 0)
+    }
+
+    /// Strip indices are modular: reels turn past the end of the strip and back onto it.
+    private static func wrap(_ stop: Int) -> Int {
+        let stops = Reel.strip.count
+        return ((stop % stops) + stops) % stops
     }
 
     /// Returns the stake of a spin that never resolved. Credits are debited when a spin starts,
@@ -179,4 +190,58 @@ public final class SlotMachine {
         defaults.set(credits, forKey: Self.creditsKey)
         defaults.set(bet, forKey: Self.betKey)
     }
+
+    // MARK: - Staging
+
+    /// Parks the machine on an exact result without playing for it.
+    ///
+    /// Offscreen renders and the window snapshot tests need particular states — a jackpot, a
+    /// push, an empty balance, a spin frozen halfway — and a live machine only reaches those by
+    /// chance, several seconds of animation later. Landings run through `score`, the same table
+    /// a real spin resolves against, so a staged card is a card the game could actually deal.
+    ///
+    /// Nothing is persisted. Staging is a rendering concern, and writing a fabricated balance
+    /// into `UserDefaults` would hand the player free credits.
+    public func stage(landings: [Int], credits: Int, bet: Int, spinning: Bool = false) {
+        precondition(landings.count == reels.count, "stage wants one landing per reel")
+
+        self.credits = credits
+        self.bet = Self.betSizes.contains(bet) ? bet : Self.betSizes[1]
+
+        for i in reels.indices {
+            let landing = Self.wrap(landings[i])
+            guard spinning else {
+                reels[i] = ReelState(position: Double(landing),
+                                     spinStart: Double(landing),
+                                     spinTarget: Double(landing))
+                continue
+            }
+            // Mirrors `spin()`: later reels travel further, so they settle left to right. Frozen
+            // partway along that travel, which is where the motion blur lives — and at a
+            // different fraction per reel, so a still shows the same stagger a spin does.
+            let target = Double(landing + (4 + i * 2) * Reel.strip.count)
+            reels[i] = ReelState(position: Self.stagedSpinProgress[i] * target,
+                                 spinStart: 0,
+                                 spinTarget: target)
+        }
+
+        guard !spinning else {
+            outcome = .spinning
+            lastWin = 0
+            lastStake = 0
+            isSpinning = true
+            return
+        }
+
+        let (result, payout) = Self.score(landings, stake: self.bet)
+        lastWin = payout
+        lastStake = self.bet
+        isSpinning = false
+        spinCount += 1
+        outcome = credits < Self.betSizes[0] ? .broke : result
+    }
+
+    /// How far through its travel each reel is in a staged spin: left nearly home, right barely
+    /// started. `ReelView` reads its blur off exactly this fraction.
+    private static let stagedSpinProgress = [0.94, 0.72, 0.45]
 }
