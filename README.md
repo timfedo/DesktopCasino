@@ -385,6 +385,31 @@ display refresh for as long as it is mounted, so leaving the marquee up until th
 one lucky spin left an idle desktop widget animating forever. For an always-on widget that is the
 difference between free and a battery cost. It is skipped entirely when Reduce Motion is on.
 
+## Snapshot tests
+
+`swift test` includes pixel snapshots of the drawing that arithmetic cannot pin: the reel at rest,
+mid-travel and settling, and the marquee at several phases, both full-frame and cropped hard to a
+corner. References live in `Tests/CasinoKitTests/__Snapshots__/`.
+
+```sh
+SNAPSHOT_RECORD=1 swift test   # re-record after a deliberate visual change, then eyeball the diff
+```
+
+Three things make them worth having rather than a liability:
+
+- **`MarqueeFrame` takes an explicit phase and pulse.** `WinMarquee` wraps it in
+  `TimelineView(.animation)`; snapshotting the animated view would differ on every run.
+- **Comparison counts changed pixels, not mean difference.** A mean was tried first and was
+  useless — the corner taper touches a few hundred pixels out of seventy thousand, so halving it
+  moved the mean far less than the tolerance and every test still passed. Counting pixels that
+  move more than 10% on any channel catches a localised change while ignoring antialiasing noise.
+- **Corners get their own cropped snapshot.** On the full frame a corner regression moves under
+  1% of pixels, uncomfortably close to any workable tolerance; in a 34pt crop the same change is
+  unmissable.
+
+Verified by perturbing the real thing: `stripeWidth` 4.2 -> 4.0 moves 2.9% of pixels against a
+0.2% tolerance, and even `cornerTaper` 0.45 -> 0.40 is caught.
+
 ## Contributing
 
 `main` is protected: changes go through a pull request, including mine.
