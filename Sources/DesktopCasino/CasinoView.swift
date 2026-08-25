@@ -14,6 +14,12 @@ struct CasinoView: View {
     @State private var hovering = false
     @State private var modeRevision = 0
 
+    /// Whether the window controls are showing: the pointer is over the card, or a render has
+    /// asked for them. Derived rather than seeded into `hovering` from `onAppear`, because
+    /// `ImageRenderer` never calls `onAppear` — the chrome was silently missing from every
+    /// offscreen render.
+    private var showsChrome: Bool { hovering || alwaysHovered }
+
     private var panel: DesktopPanel? { panelRef.panel }
     /// Drops back to false a minute after a win. `TimelineView(.animation)` asks for a frame at
     /// display refresh for as long as the marquee is mounted, so leaving it up until the next
@@ -159,7 +165,7 @@ struct CasinoView: View {
                 ) {
                     NSApp.terminate(nil)
                 }
-                .opacity(hovering ? 1 : 0)
+                .opacity(showsChrome ? 1 : 0)
 
                 // Cycles window placement: normal → floating → widget → normal. Stays visible
                 // outside `normal` so there is always a way back out of a placement where the
@@ -173,13 +179,10 @@ struct CasinoView: View {
                     panel?.setMode(mode.next)
                     modeRevision += 1
                 }
-                .opacity(hovering || mode != .normal ? 1 : 0)
+                .opacity(showsChrome || mode != .normal ? 1 : 0)
 
                 Spacer()
             }
-        }
-        .onAppear {
-            if alwaysHovered { hovering = true }
         }
     }
 

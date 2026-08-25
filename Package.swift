@@ -20,9 +20,12 @@ let package = Package(
             dependencies: ["CasinoKit"],
             path: "Sources/IconDesigner"
         ),
+        // Depends on the app target as well as the kit: the window snapshots render `CasinoView`,
+        // which belongs to the app because it drives the panel. SwiftPM links an executable
+        // target into a test bundle without ever calling its `main`.
         .testTarget(
             name: "CasinoKitTests",
-            dependencies: ["CasinoKit"],
+            dependencies: ["CasinoKit", "DesktopCasino"],
             path: "Tests/CasinoKitTests"
         ),
     ]
