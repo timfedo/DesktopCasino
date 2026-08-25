@@ -37,6 +37,6 @@ jobs:
             echo "Nothing new to record."
             exit 0
           fi
-          git status --short --cached
+          git diff --cached --name-status
           git commit -m "Record window snapshot references on macos-latest"
           git push origin HEAD:${{ github.head_ref }}
