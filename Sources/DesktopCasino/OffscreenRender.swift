@@ -14,7 +14,10 @@ enum OffscreenRender {
     static func writeIfRequested() -> Bool {
         let args = CommandLine.arguments
         if let flag = args.firstIndex(of: "--snapshot"), flag + 1 < args.count {
-            render(CasinoView(machine: SlotMachine(), alwaysHovered: true), to: args[flag + 1])
+            render(
+                CasinoView(machine: SlotMachine(), alwaysHovered: true, isStill: true),
+                to: args[flag + 1]
+            )
             return true
         }
         // `--faces` shows every symbol at once, which a single spin cannot do.

@@ -10,6 +10,15 @@ struct CasinoView: View {
     var panelRef = PanelRef()
     /// Forces the hover state on for offscreen renders, where there is no pointer to hover with.
     var alwaysHovered = false
+    /// Marks a render as a still, which suppresses the win celebration.
+    ///
+    /// The marquee travels off a clock, so a still can only ever pin an arbitrary phase. It was
+    /// already *meant* to be absent from offscreen renders — `celebrating` is set from `.task`,
+    /// and the reasoning was that a render never runs one. That holds on some machines and not
+    /// others: `window-triple` and `window-jackpot` matched on the CI runner and failed locally,
+    /// where the task does get a turn before `ImageRenderer` captures. Saying so outright is what
+    /// makes the reference reproducible rather than a property of the machine that recorded it.
+    var isStill = false
 
     @State private var hovering = false
     @State private var modeRevision = 0
@@ -110,7 +119,7 @@ struct CasinoView: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .task(id: machine.spinCount) {
-            celebrating = isTriple && !reduceMotion
+            celebrating = isTriple && !reduceMotion && !isStill
             guard celebrating else { return }
             // Re-triggered by `spinCount`, so a new spin cancels the previous countdown.
             try? await Task.sleep(for: .seconds(Self.celebrationDuration))
