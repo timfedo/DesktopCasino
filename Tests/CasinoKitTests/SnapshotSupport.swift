@@ -60,7 +60,14 @@ enum Snapshot {
     ) -> NSBitmapImageRep? {
         let content = size.map { AnyView(view.frame(width: $0.width, height: $0.height)) }
             ?? AnyView(view)
-        let renderer = ImageRenderer(content: content)
+        // The locale is pinned because `Text("\(Int)")` groups digits the way the *renderer's*
+        // locale says. A four-figure balance recorded on a machine that separates with a space
+        // ("1 090") can never match a runner that uses a comma ("1,090") — which is precisely what
+        // made `window-jackpot`, the only reference whose credits reach four digits, fail on CI
+        // while all eleven others passed. The app stays localised; only the reference is pinned.
+        let renderer = ImageRenderer(
+            content: content.environment(\.locale, Locale(identifier: "en_US"))
+        )
         renderer.scale = scale
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation else { return nil }
         return NSBitmapImageRep(data: tiff)
