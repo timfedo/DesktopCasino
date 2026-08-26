@@ -339,7 +339,7 @@ struct CasinoView: View {
 
     private var winHighlight: Color {
         guard isWin else { return .white.opacity(0.12) }
-        return machine.outcome.isJackpot ? .cyan : gold
+        return machine.outcome.isJackpot ? Palette.cyan : gold
     }
 
     private var outcomeText: String {
