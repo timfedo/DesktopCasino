@@ -1,4 +1,5 @@
 .build/
 DesktopCasino.app/
+Tests/CasinoKitTests/__Failures__/
 .DS_Store
 dist/

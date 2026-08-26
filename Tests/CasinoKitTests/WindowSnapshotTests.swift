@@ -60,7 +60,7 @@ struct WindowSnapshotTests {
     /// The card exactly as the panel hosts it. No frame: its height comes from its content, and
     /// letting the render size itself is what makes a taller stack a test failure.
     private static func window(_ machine: SlotMachine, hovered: Bool = false) -> some View {
-        CasinoView(machine: machine, alwaysHovered: hovered)
+        CasinoView(machine: machine, alwaysHovered: hovered, isStill: true)
     }
 
     // MARK: - States
@@ -117,10 +117,11 @@ struct WindowSnapshotTests {
 
     @Test("Three of a kind keeps the gold treatment")
     func triple() throws {
-        // No marquee here, deliberately. It is mounted from `.task`, which an offscreen render
-        // never runs, and it animates off a clock, which a still could not pin anyway — the
-        // marquee has its own fixed-phase snapshots. What this fixes is the frame underneath:
-        // gold, and not the jackpot's cyan.
+        // No marquee here, deliberately: it animates off a clock, so a still could only pin an
+        // arbitrary phase — the marquee has its own fixed-phase snapshots. That used to rest on
+        // an offscreen render never running the `.task` that mounts it, which turned out to be
+        // true on the CI runner and false on at least one Mac, so `isStill` now says it outright.
+        // What this fixes is the frame underneath: gold, and not the jackpot's cyan.
         try Snapshot.assert(
             Self.window(Self.machine(["seven", "seven", "seven"], credits: 590, bet: 10)),
             named: "window-triple"

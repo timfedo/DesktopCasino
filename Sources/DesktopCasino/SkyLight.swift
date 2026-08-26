@@ -23,6 +23,7 @@ enum SkyLight {
     private typealias MainConnectionID = @convention(c) () -> Int32
     private typealias CopyManagedDisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
     private typealias AddWindowsToSpaces = @convention(c) (Int32, CFArray, CFArray) -> Void
+    private typealias RemoveWindowsFromSpaces = @convention(c) (Int32, CFArray, CFArray) -> Void
     private typealias CopySpacesForWindows =
         @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
     private typealias SetWindowLevel = @convention(c) (Int32, UInt32, Int32) -> Int32
@@ -48,6 +49,10 @@ enum SkyLight {
         symbol("SLSCopyManagedDisplaySpaces")
     private static let addWindowsToSpaces: AddWindowsToSpaces? =
         symbol("SLSAddWindowsToSpaces")
+    // Not part of `isAvailable`: this only tidies membership up after the fact, and losing the
+    // tidy-up is no reason to give up all-Spaces presence entirely.
+    private static let removeWindowsFromSpaces: RemoveWindowsFromSpaces? =
+        symbol("SLSRemoveWindowsFromSpaces")
     private static let copySpacesForWindows: CopySpacesForWindows? =
         symbol("SLSCopySpacesForWindows")
     // `SLSGetWindowLevel` is deliberately not bound. It exists, but the obvious
@@ -95,6 +100,18 @@ enum SkyLight {
     static func add(window: Int, to spaces: [UInt64]) {
         guard !spaces.isEmpty else { return }
         addWindowsToSpaces?(
+            connection,
+            [NSNumber(value: window)] as CFArray,
+            spaces.map { NSNumber(value: $0) } as CFArray
+        )
+    }
+
+    /// Gives up membership again. Safe on a window that is an all-Spaces floater by then: measured,
+    /// it keeps its position and its depth in the window server's list, since `.canJoinAllSpaces`
+    /// is what is holding it on screen at that point rather than the membership being removed.
+    static func remove(window: Int, from spaces: [UInt64]) {
+        guard !spaces.isEmpty else { return }
+        removeWindowsFromSpaces?(
             connection,
             [NSNumber(value: window)] as CFArray,
             spaces.map { NSNumber(value: $0) } as CFArray

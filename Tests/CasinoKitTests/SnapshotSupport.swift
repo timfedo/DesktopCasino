@@ -22,6 +22,17 @@ enum Snapshot {
             .appendingPathComponent("__Snapshots__")
     }
 
+    /// Where a mismatch is written, beside the references rather than in a temp directory.
+    ///
+    /// A snapshot failure is a picture and the log only carries a percentage, so the render has to
+    /// be reachable to be any use. On CI it was not: `temporaryDirectory` resolves to a private
+    /// `/var/folders` path that `TMPDIR` does not move, so nothing could collect it. Git-ignored.
+    static var failureDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("__Failures__")
+    }
+
     static var isRecording: Bool {
         ProcessInfo.processInfo.environment["SNAPSHOT_RECORD"] != nil
     }
@@ -49,7 +60,14 @@ enum Snapshot {
     ) -> NSBitmapImageRep? {
         let content = size.map { AnyView(view.frame(width: $0.width, height: $0.height)) }
             ?? AnyView(view)
-        let renderer = ImageRenderer(content: content)
+        // The locale is pinned because `Text("\(Int)")` groups digits the way the *renderer's*
+        // locale says. A four-figure balance recorded on a machine that separates with a space
+        // ("1 090") can never match a runner that uses a comma ("1,090") — which is precisely what
+        // made `window-jackpot`, the only reference whose credits reach four digits, fail on CI
+        // while all eleven others passed. The app stays localised; only the reference is pinned.
+        let renderer = ImageRenderer(
+            content: content.environment(\.locale, Locale(identifier: "en_US"))
+        )
         renderer.scale = scale
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation else { return nil }
         return NSBitmapImageRep(data: tiff)
@@ -112,8 +130,10 @@ enum Snapshot {
 
         let difference = differingFraction(expected, rendered)
         if difference > tolerance {
-            let failure = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(name).failed.png")
+            let failure = failureDirectory.appendingPathComponent("\(name).failed.png")
+            try? FileManager.default.createDirectory(
+                at: failureDirectory, withIntermediateDirectories: true
+            )
             try? png.write(to: failure)
             Issue.record(
                 """

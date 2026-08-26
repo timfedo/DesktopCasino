@@ -4,8 +4,8 @@ import SwiftUI
 
 /// Debug affordance: `DesktopCasino --snapshot out.png` renders the UI offscreen and exits.
 /// Useful for eyeballing layout without granting Screen Recording to capture a desktop-level
-/// window. The `.ultraThinMaterial` backdrop has nothing to sample offscreen, so the card
-/// reads slightly darker here than it does over a wallpaper.
+/// window. The card backdrop is opaque, so what this renders is what the panel looks like on a
+/// desktop — it no longer reads darker here than it does over a wallpaper.
 ///
 /// Not to be confused with the test suite's `Snapshot`, which compares renders against
 /// committed references. This one only writes a PNG for a human to look at.
@@ -14,7 +14,10 @@ enum OffscreenRender {
     static func writeIfRequested() -> Bool {
         let args = CommandLine.arguments
         if let flag = args.firstIndex(of: "--snapshot"), flag + 1 < args.count {
-            render(CasinoView(machine: SlotMachine(), alwaysHovered: true), to: args[flag + 1])
+            render(
+                CasinoView(machine: SlotMachine(), alwaysHovered: true, isStill: true),
+                to: args[flag + 1]
+            )
             return true
         }
         // `--faces` shows every symbol at once, which a single spin cannot do.

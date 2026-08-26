@@ -44,7 +44,9 @@ swift run DesktopCasino --win /tmp/win.png
 
 Handy environment variables: `DESKTOPCASINO_MODE=normal|floating|widget` forces a placement (the
 escape hatch if widget mode ever leaves the panel unreachable), `DESKTOPCASINO_DEBUG=1` traces
-placement and mouse events, and `DESKTOPCASINO_NO_SKYLIGHT=1` disables the private-API paths.
+placement and mouse events, `DESKTOPCASINO_SPACES=member` puts widget mode back on per-Space
+membership instead of joining all Spaces (see [All Spaces](#all-spaces-floater-or-member)), and
+`DESKTOPCASINO_NO_SKYLIGHT=1` disables the private-API paths.
 
 ## Icon designer
 
@@ -187,7 +189,7 @@ Stickies can by using private API. `widget` is the default.
 | `level = .normal`, or `.floating` when pinned | AppKit's level, which is what it consults to route mouse events. Widget mode leaves this at `.normal` and moves only the *server* level |
 | z-order left to the window manager | No `orderBack` fighting, so no click blink and no Space-change flash |
 | `orderBack(nil)` once at launch | Starts behind your work instead of on top of it |
-| `.canJoinAllSpaces` **only when floating**; the others use SkyLight (below) | A window that joins all Spaces is not part of any Space's persistent z-order, so the window server composites it at the *front* of its level on every Space switch, and reordering afterwards is the same one-frame flash as raise-on-click. Floating, arriving on top is correct |
+| `.canJoinAllSpaces` when **floating or widget**; `normal` joins each Space through SkyLight (below) | A window that joins all Spaces belongs to no Space's z-order, so it is composited outside a Space transition and stays on screen throughout one — the reason widget mode uses it. It arrives at the *front of its level*, which is on top for `floating` (correct) and still behind everything for `widget` (level `desktopIconWindow + 1`), but would be a flash on top for `normal` |
 | `.stationary` | Stays put during Mission Control / Exposé |
 | `.ignoresCycle` | Kept out of ⌘-Tab and the Window menu |
 | `.nonactivatingPanel` + `canBecomeKey = false` | Clicking plays the machine without pulling the app forward or stealing keyboard focus from what you were doing — better than Stickies, which activates normally |
@@ -241,24 +243,62 @@ defaults write dev.timfedo.DesktopCasino windowMode normal
 
 or launch with `DESKTOPCASINO_MODE=normal`.
 
-### All Spaces without the flash, via SkyLight
+### All Spaces: floater or member
 
-`.canJoinAllSpaces` is the only *public* way to be on every Space, and it is exactly what causes
-the flash. The private window-server API offers the missing distinction:
+There are two ways to be on every Space, and they differ only during a Space *transition*:
 
 - `.canJoinAllSpaces` makes the window an all-Spaces **floater**, belonging to no individual
-  Space's z-order — so it is composited at the front of its level on arrival.
+  Space's z-order — so it is composited independently of the two Spaces sliding past each other,
+  and stays on screen throughout. The price is arriving at the front of its level.
 - `SLSAddWindowsToSpaces` makes it a **member** of each Space, with a z-order slot in every one.
-  There is no arrival, so there is nothing to flash.
+  There is no arrival — but a window can only travel in one sliding group, so it leaves with the
+  outgoing Space and is not painted into the incoming one until the transition finishes.
+
+Widget mode used membership first, and that is exactly why the panel popped in a beat late on
+every Space switch: for half a second the new desktop had no slot machine on it. It is a floater
+now, and the arrival cost turns out not to apply, because the *server* level is already down at
+`desktopIconWindow + 1` — the front of that level is still behind every application window.
+
+Measured, launching the panel in each strategy and reading its index in the window server's
+front-to-back on-screen list across a Space change:
+
+| Widget strategy | Depth before | Depth after |
+| --- | --- | --- |
+| floater (`.canJoinAllSpaces`) | 15 of 24 | 23 of 30 |
+| member (`SLSAddWindowsToSpaces`) | 16 of 30 | 23 of 30 |
+
+Same resting depth, so the floater does not come forward. `normal` mode stays a member on
+purpose: its level *is* 0, where the front of the level is on top of whatever you were working
+in, and that is a flash worth avoiding. `DESKTOPCASINO_SPACES=member` puts widget mode back on
+the membership path without a rebuild, should a macOS update ever start compositing floaters
+above a transition regardless of level.
+
+Floating above the transition has one consequence worth spelling out, because it cost the card
+its frosted backdrop. Settled on the desktop the panel sits *below* every window, so the only
+thing behind it is the wallpaper. During a transition it is above the animation instead, and the
+two Spaces' windows slide behind it — so an `.ultraThinMaterial` backdrop, which samples whatever
+is behind the window, picked up any bright window passing underneath and lifted the whole card
+for the length of the slide. The backdrop is now opaque: `Palette.cardBottom` under
+`Palette.card()`, which is how the icon has always been composited, so the two finally resolve to
+the same colour instead of merely sharing a gradient. The frost only ever showed when nothing was
+moving, and it cost a visible flicker on every Space switch.
 
 `SkyLight.swift` binds its symbols by `dlsym` rather than linking, since SkyLight exists only in
 the dyld shared cache and a missing symbol should degrade to "unavailable" rather than break
 launch: `SLSMainConnectionID`, `SLSCopyManagedDisplaySpaces`, `SLSAddWindowsToSpaces`,
-`SLSCopySpacesForWindows`, `SLSSetWindowLevel`, `SLSSetWindowEventMask`, `SLSGetWindowEventMask`.
+`SLSRemoveWindowsFromSpaces`, `SLSCopySpacesForWindows`, `SLSSetWindowLevel`,
+`SLSSetWindowEventMask`, `SLSGetWindowEventMask`.
 
-Membership is re-asserted on `activeSpaceDidChangeNotification`, because Spaces can be created at
-any time and a brand new one will not contain the window. Only Spaces of `type == 0` are joined —
-fullscreen and tiled Spaces are skipped, matching what `.canJoinAllSpaces` does.
+The pin button reaches widget mode by way of `normal`, which joins each Space by hand, so
+becoming a floater hands that membership back with `SLSRemoveWindowsFromSpaces` — otherwise the
+panel is a floater *and* a member, and it is the membership that decides how it travels through a
+transition. Measured: with `.canJoinAllSpaces` already in force, removing the membership leaves
+the window exactly where it was, at the same depth, and it survives a Space change.
+
+Membership, where it is still used, is re-asserted on `activeSpaceDidChangeNotification`, because
+Spaces can be created at any time and a brand new one will not contain the window. Only Spaces of
+`type == 0` are joined — fullscreen and tiled Spaces are skipped, matching what
+`.canJoinAllSpaces` does, so neither strategy changes what happens inside a fullscreen app.
 
 Verified by reading membership back rather than by switching Space by hand: with
 `canJoinAllSpaces=false`, `SLSCopySpacesForWindows` reports the window in all 11 Spaces.

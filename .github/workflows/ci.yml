@@ -37,6 +37,17 @@ jobs:
       - name: Test
         run: swift test
 
+      # A snapshot failure is a picture, and the log only carries a percentage. Without the image
+      # the runner actually produced, a reference recorded on one machine and verified on another
+      # is undiagnosable from here — which is exactly the failure worth catching.
+      - name: Upload failed snapshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-snapshots
+          path: Tests/CasinoKitTests/__Failures__/*.png
+          if-no-files-found: ignore
+
       # Cheap smoke test: the bundle assembles, the icon lands, and the version is stamped.
       - name: Package the app
         run: |
