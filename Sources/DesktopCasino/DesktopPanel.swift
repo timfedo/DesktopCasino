@@ -132,17 +132,59 @@ final class DesktopPanel: NSPanel {
         // anything lower here is inert. Only the server level goes down — see `pinBelowWindows`.
         level = mode == .floating ? .floating : .normal
 
-        // `.canJoinAllSpaces` makes a window an all-Spaces floater belonging to no Space's
-        // z-order, so the window server composites it at the front of its level on every switch.
-        // Only `floating` wants that, since arriving on top is correct there. The other modes get
-        // real per-Space membership through SkyLight instead — see `joinEverySpace()`.
-        collectionBehavior = mode == .floating
+        // See `joinsAllSpaces` for which modes take which route to every Space, and why.
+        collectionBehavior = joinsAllSpaces
             ? [.canJoinAllSpaces, .stationary, .ignoresCycle]
             : [.stationary, .ignoresCycle]
 
+        // Cycling the pin button reaches widget mode by way of `normal`, which joins each Space
+        // by hand. Leave that membership on record and the panel is a floater *and* a member, and
+        // it is the membership that decides how it travels through a Space transition — the
+        // problem being fixed. So a mode that floats gives the membership back.
+        if joinsAllSpaces { leaveJoinedSpaces() }
+
         pinBelowWindows()
-        trace("mode=\(mode.rawValue) appKitLevel=\(level.rawValue)")
+        trace("mode=\(mode.rawValue) appKitLevel=\(level.rawValue) sticky=\(joinsAllSpaces)")
     }
+
+    /// Whether this mode reaches every Space as an all-Spaces *floater* (`.canJoinAllSpaces`)
+    /// rather than by explicit per-Space membership through SkyLight.
+    ///
+    /// The distinction only shows during a Space transition. A floater belongs to no Space's
+    /// z-order, so the window server composites it independently of the two Spaces sliding past
+    /// each other and it stays on screen throughout. A *member* has a slot in each Space's
+    /// z-order, and a window can only be in one sliding group at a time — so it leaves with the
+    /// outgoing Space and is not painted into the incoming one until the transition has finished.
+    /// That is the whole reason widget mode used to pop in a beat late.
+    ///
+    /// The cost of being a floater is arriving at the *front of its level*. For `normal` that is
+    /// the front of level 0, on top of whatever you were working in, so `normal` stays a member.
+    /// Widget mode's level is `desktopIconWindow + 1`, where the front of the level is still
+    /// behind every application window — measured after a Space change, the panel sits at the same
+    /// depth in the window server's front-to-back list either way. So widget mode can afford it,
+    /// and `floating` wants to arrive on top anyway.
+    private var joinsAllSpaces: Bool {
+        switch mode {
+        case .floating: true
+        case .widget: Self.spacesStrategy == .sticky
+        case .normal: false
+        }
+    }
+
+    /// How widget mode reaches every Space.
+    ///
+    /// `sticky` is the default and the one that survives a Space transition. `member` is the older
+    /// behaviour, kept reachable with `DESKTOPCASINO_SPACES=member` because it is the arrangement
+    /// that *cannot* flash on top: if a macOS update ever starts compositing all-Spaces floaters
+    /// above a transition regardless of level, this is the way back without a rebuild.
+    enum SpacesStrategy: String {
+        case sticky
+        case member
+    }
+
+    static let spacesStrategy = SpacesStrategy(
+        rawValue: ProcessInfo.processInfo.environment["DESKTOPCASINO_SPACES"] ?? ""
+    ) ?? .sticky
 
     /// Shown at the back so launching does not throw the machine over whatever you are working in.
     func show() {
@@ -177,10 +219,12 @@ final class DesktopPanel: NSPanel {
     /// `.canJoinAllSpaces` produces. A member has a z-order slot inside each Space, so switching
     /// Space is not an "arrival" and the window server has no reason to composite it on top.
     ///
+    /// Only the modes that are not floaters need this — see `joinsAllSpaces`.
+    ///
     /// Idempotent, and re-run whenever the Space layout may have changed — Spaces can be created
     /// and destroyed at any time, and a brand new one will not contain the window.
     func joinEverySpace() {
-        guard Self.usesSkyLight, mode != .floating, windowNumber > 0 else { return }
+        guard Self.usesSkyLight, !joinsAllSpaces, windowNumber > 0 else { return }
 
         // Ordinary Spaces only. A fullscreen app owns its Space, and `.canJoinAllSpaces` does not
         // put windows there either — matching that keeps behaviour unsurprising.
@@ -188,6 +232,16 @@ final class DesktopPanel: NSPanel {
         SkyLight.add(window: windowNumber, to: user)
         joinedSpaces = Set(user)
         trace("joined \(SkyLight.spaces(forWindow: windowNumber).count) of \(user.count) spaces")
+    }
+
+    /// Undoes `joinEverySpace()`, so a window that has become an all-Spaces floater is not also
+    /// carrying per-Space membership from whichever mode it was in before.
+    private func leaveJoinedSpaces() {
+        guard Self.usesSkyLight, !joinedSpaces.isEmpty, windowNumber > 0 else { return }
+
+        SkyLight.remove(window: windowNumber, from: Array(joinedSpaces))
+        joinedSpaces = []
+        trace("dropped explicit space membership")
     }
 
     private func userSpaceIDs() -> [UInt64] {
@@ -209,7 +263,7 @@ final class DesktopPanel: NSPanel {
     func spaceDidChange() {
         guard Self.usesSkyLight, windowNumber > 0 else { return }
 
-        if mode != .floating, Set(userSpaceIDs()) != joinedSpaces {
+        if !joinsAllSpaces, Set(userSpaceIDs()) != joinedSpaces {
             trace("space layout changed, rejoining")
             joinEverySpace()
         }
