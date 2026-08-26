@@ -3,15 +3,6 @@ import SwiftUI
 public enum Palette {
     public static let gold = Color(red: 0.98, green: 0.79, blue: 0.35)
     public static let red = Reel.slotRed
-
-    /// The jackpot's highlight, spelled out rather than SwiftUI's `.cyan`.
-    ///
-    /// A system colour resolves per appearance and environment, and this was the only one in the
-    /// card — everything else here is a fixed triple. That made `window-jackpot` the single
-    /// snapshot that could not survive being recorded on one machine and verified on another,
-    /// while `window-triple`, gold and identical in every other respect, was fine. The value is
-    /// what `.cyan` resolved to, so the jackpot looks as it did.
-    public static let cyan = Color(red: 0, green: 0.753, blue: 0.910)
     // Green has to lead in *both* stops. `cardBottom` used to be blue-dominant
     // (0.02, 0.05, 0.08), so the card faded from felt green into navy and read colder than the
     // top suggested — most of the "not very green" was down there rather than in `cardTop`.
