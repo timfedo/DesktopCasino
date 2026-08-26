@@ -27,7 +27,8 @@ Widget mode is the interesting one, and most of this README is about why it is h
 
 ```sh
 swift run                 # quick iteration
-swift test                # 22 tests: payout table, outline geometry, credit arithmetic
+swift test                # payout table, outline geometry, credit arithmetic, and pixel
+                          # snapshots of the reels, the marquee and the whole window
 ./Scripts/make_app.sh     # build DesktopCasino.app, then: open DesktopCasino.app
 
 # Render the UI offscreen to a PNG — handy because capturing the window with
@@ -427,25 +428,42 @@ difference between free and a battery cost. It is skipped entirely when Reduce M
 
 ## Snapshot tests
 
-`swift test` includes pixel snapshots of the drawing that arithmetic cannot pin: the reel at rest,
-mid-travel and settling, and the marquee at several phases, both full-frame and cropped hard to a
-corner. References live in `Tests/CasinoKitTests/__Snapshots__/`.
+`swift test` includes pixel snapshots of the drawing that arithmetic cannot pin. Two layers of
+them:
+
+- **Components** — the reel at rest, mid-travel and settling; the marquee at several phases, both
+  full-frame and cropped hard to a corner; the seven's numeral face.
+- **The whole window** — the assembled card in each state a player can see it in: idle, mid-spin,
+  a loss, a push, a 2x pair, a triple, the jackpot, an empty balance, and a balance too small for
+  the larger chips. Plus a hard crop of the two window controls, which are 13pt across and would
+  otherwise be lost in the noise of a 264x372 card.
+
+References live in `Tests/CasinoKitTests/__Snapshots__/`.
 
 ```sh
 SNAPSHOT_RECORD=1 swift test   # re-record after a deliberate visual change, then eyeball the diff
 ```
 
-Three things make them worth having rather than a liability:
+What makes them worth having rather than a liability:
 
 - **`MarqueeFrame` takes an explicit phase and pulse.** `WinMarquee` wraps it in
   `TimelineView(.animation)`; snapshotting the animated view would differ on every run.
+- **Window states are staged, not played for.** `SlotMachine.stage(landings:credits:bet:)` parks
+  the machine on an exact result through the same payout table a real spin resolves against, so
+  the symbols on the reels always agree with the line printed underneath — and no snapshot waits
+  two and a half seconds on a die roll.
+- **The window renders at its own height.** The card sizes itself from its content and the panel
+  follows, so the snapshots are taken with no frame at all: a stack that grew fails as a size
+  mismatch, naming both heights, rather than as a wall of moved pixels.
 - **Comparison counts changed pixels, not mean difference.** A mean was tried first and was
   useless — the corner taper touches a few hundred pixels out of seventy thousand, so halving it
   moved the mean far less than the tolerance and every test still passed. Counting pixels that
   move more than 10% on any channel catches a localised change while ignoring antialiasing noise.
-- **Corners get their own cropped snapshot.** On the full frame a corner regression moves under
-  1% of pixels, uncomfortably close to any workable tolerance; in a 34pt crop the same change is
-  unmissable.
+- **Small controls get their own cropped snapshot.** On the full frame a marquee corner
+  regression moves under 1% of pixels, uncomfortably close to any workable tolerance; in a 34pt
+  crop the same change is unmissable. The window controls get the same treatment for the same
+  reason, with a paired assertion that hovered and unhovered actually differ — otherwise the day
+  hover broke, both references would be re-recorded identical and both tests would pass for ever.
 
 Verified by perturbing the real thing: `stripeWidth` 4.2 -> 4.0 moves 2.9% of pixels against a
 0.2% tolerance, and even `cornerTaper` 0.45 -> 0.40 is caught.
@@ -461,7 +479,7 @@ git push -u origin my-change
 gh pr create --fill
 ```
 
-CI runs on every PR — build, 22 tests, and a packaging smoke check that the bundle assembles with
+CI runs on every PR — build, the test suite, and a packaging smoke check that the bundle assembles with
 the version stamped and the icon in place. It is a required check, so a red PR cannot merge. No
 approvals are required, so you can merge your own work once CI is green.
 
@@ -500,7 +518,7 @@ Sources/DesktopCasino/        The widget
   DesktopPanel.swift          Placement modes, SkyLight level and Space membership
   SkyLight.swift              dlsym bindings to the private window-server API
   CasinoView.swift            SwiftUI UI, the Animatable reel, the win marquee
-  Snapshot.swift              --snapshot / --faces / --win offscreen renderers
+  OffscreenRender.swift       --snapshot / --faces / --win offscreen renderers
 
 Sources/IconDesigner/         The icon tool
   main.swift                  Window bootstrap, --render headless path
@@ -512,6 +530,10 @@ Tests/CasinoKitTests/         swift test
   PayoutTests.swift           Pins RTP 48/49 and the outcome rates exhaustively
   OutlineTests.swift          Closure, unit normals, continuity across corner seams
   SlotMachineTests.swift      Debit/refund, persistence, resting-stop invariant
+  SnapshotSupport.swift       Offscreen render and tolerance-based image comparison
+  SnapshotTests.swift         Reels, marquee phases and corners, the seven's face
+  WindowSnapshotTests.swift   The assembled card in every state, and its controls
+  __Snapshots__/              Committed reference PNGs
 ```
 
 `SlotMachine` takes its `UserDefaults` by injection, so tests run against a scratch domain

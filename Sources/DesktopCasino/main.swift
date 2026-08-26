@@ -2,7 +2,7 @@ import AppKit
 
 let app = NSApplication.shared
 
-if Snapshot.writeIfRequested() { exit(0) }
+if OffscreenRender.writeIfRequested() { exit(0) }
 
 let delegate = AppDelegate()
 app.delegate = delegate

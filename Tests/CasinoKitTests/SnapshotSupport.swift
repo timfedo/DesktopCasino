@@ -38,8 +38,18 @@ enum Snapshot {
     /// sensitive to a localised change while staying blind to uniform rasterisation noise.
     static let tolerance = 0.002
 
-    static func render(_ view: some View, size: CGSize, scale: CGFloat = 2) -> NSBitmapImageRep? {
-        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
+    /// Renders at `size`, or at the view's own ideal size when that is nil.
+    ///
+    /// Nil is how the whole window is taken: the card's height comes from its content, so
+    /// pinning it to a number here would hide exactly the regression worth catching — a control
+    /// that grew and pushed the stack taller. Left free, the recorded image *is* the layout, and
+    /// a height change surfaces as the size mismatch below rather than as pixels.
+    static func render(
+        _ view: some View, size: CGSize? = nil, scale: CGFloat = 2
+    ) -> NSBitmapImageRep? {
+        let content = size.map { AnyView(view.frame(width: $0.width, height: $0.height)) }
+            ?? AnyView(view)
+        let renderer = ImageRenderer(content: content)
         renderer.scale = scale
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation else { return nil }
         return NSBitmapImageRep(data: tiff)
@@ -47,7 +57,7 @@ enum Snapshot {
 
     static func assert(
         _ view: some View,
-        size: CGSize,
+        size: CGSize? = nil,
         named name: String,
         sourceLocation: SourceLocation = #_sourceLocation
     ) throws {
@@ -87,6 +97,8 @@ enum Snapshot {
         guard expected.pixelsWide == rendered.pixelsWide,
               expected.pixelsHigh == rendered.pixelsHigh
         else {
+            // For a self-sizing view this is the layout assertion, not a housekeeping check:
+            // the window got taller or narrower than the reference says it should be.
             Issue.record(
                 """
                 \(name): size changed — \
@@ -115,8 +127,72 @@ enum Snapshot {
         }
     }
 
-    /// Fraction of sampled pixels where any channel moved by more than `channelThreshold`.
+    /// Fraction of pixels where any channel moved by more than `channelThreshold`.
     private static func differingFraction(
+        _ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep
+    ) -> Double {
+        guard let a = canonical(lhs), let b = canonical(rhs),
+              let left = a.bitmapData, let right = b.bitmapData
+        else {
+            return slowDifferingFraction(lhs, rhs)
+        }
+
+        let cutoff = UInt8(channelThreshold * 255)
+        let width = a.pixelsWide
+        let rowBytes = a.bytesPerRow
+        var changed = 0
+
+        for y in 0..<a.pixelsHigh {
+            var l = left + y * rowBytes
+            var r = right + y * rowBytes
+            for _ in 0..<width {
+                var moved = false
+                for channel in 0..<4 where !moved {
+                    let delta = l[channel] > r[channel]
+                        ? l[channel] - r[channel]
+                        : r[channel] - l[channel]
+                    if delta > cutoff { moved = true }
+                }
+                if moved { changed += 1 }
+                l += 4
+                r += 4
+            }
+        }
+        return Double(changed) / Double(a.pixelsWide * a.pixelsHigh)
+    }
+
+    /// Redraws into one known layout — 8-bit RGBA, non-planar, device RGB — so the comparison can
+    /// walk bytes instead of allocating two colour-converted `NSColor`s per pixel.
+    ///
+    /// Worth the twenty lines: the window snapshots are 528x744, five times the area of the
+    /// component ones and a dozen of them, and the per-pixel `NSColor` path turned the suite from
+    /// seconds into a wait. It also stops the comparison assuming anything about the layout
+    /// `ImageRenderer` happens to hand back.
+    private static func canonical(_ rep: NSBitmapImageRep) -> NSBitmapImageRep? {
+        guard let canvas = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: rep.pixelsWide,
+            pixelsHigh: rep.pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: rep.pixelsWide * 4,
+            bitsPerPixel: 32
+        ), let context = NSGraphicsContext(bitmapImageRep: canvas) else { return nil }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        // The bitmap context is one point per pixel, so this is a straight copy, not a resample.
+        _ = rep.draw(in: NSRect(x: 0, y: 0, width: rep.pixelsWide, height: rep.pixelsHigh))
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        return canvas
+    }
+
+    /// Fallback for the day `canonical` cannot allocate its canvas. Same answer, slowly.
+    private static func slowDifferingFraction(
         _ lhs: NSBitmapImageRep, _ rhs: NSBitmapImageRep
     ) -> Double {
         var changed = 0
