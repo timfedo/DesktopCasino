@@ -34,8 +34,23 @@ jobs:
       - name: Build
         run: swift build --build-tests
 
+      # `TMPDIR` is pinned so the failed renders below land somewhere the upload can find:
+      # `FileManager.temporaryDirectory` honours it.
       - name: Test
         run: swift test
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+      # A snapshot failure is a picture, and the log only carries a percentage. Without the image
+      # the runner actually produced, a reference recorded on one machine and verified on another
+      # is undiagnosable from here — which is exactly the failure worth catching.
+      - name: Upload failed snapshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-snapshots
+          path: ${{ runner.temp }}/*.failed.png
+          if-no-files-found: ignore
 
       # Cheap smoke test: the bundle assembles, the icon lands, and the version is stamped.
       - name: Package the app
