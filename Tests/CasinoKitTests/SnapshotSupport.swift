@@ -22,6 +22,17 @@ enum Snapshot {
             .appendingPathComponent("__Snapshots__")
     }
 
+    /// Where a mismatch is written, beside the references rather than in a temp directory.
+    ///
+    /// A snapshot failure is a picture and the log only carries a percentage, so the render has to
+    /// be reachable to be any use. On CI it was not: `temporaryDirectory` resolves to a private
+    /// `/var/folders` path that `TMPDIR` does not move, so nothing could collect it. Git-ignored.
+    static var failureDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("__Failures__")
+    }
+
     static var isRecording: Bool {
         ProcessInfo.processInfo.environment["SNAPSHOT_RECORD"] != nil
     }
@@ -112,8 +123,10 @@ enum Snapshot {
 
         let difference = differingFraction(expected, rendered)
         if difference > tolerance {
-            let failure = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(name).failed.png")
+            let failure = failureDirectory.appendingPathComponent("\(name).failed.png")
+            try? FileManager.default.createDirectory(
+                at: failureDirectory, withIntermediateDirectories: true
+            )
             try? png.write(to: failure)
             Issue.record(
                 """
