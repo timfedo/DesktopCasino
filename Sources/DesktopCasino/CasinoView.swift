@@ -72,8 +72,18 @@ struct CasinoView: View {
         .padding(16)
         .frame(width: DesktopPanel.size.width)
         .background {
+            // Opaque, and deliberately not `.ultraThinMaterial`. A behind-window material samples
+            // whatever is behind the window, and in widget mode the panel floats above a Space
+            // transition — so the outgoing and incoming Spaces' windows slide *behind* it, and a
+            // bright one showing through the card lifted the whole thing for the length of the
+            // slide. Settled on the desktop the panel only ever sees the wallpaper, because it
+            // sits below every window, so the frost cost a visible flicker on every Space switch
+            // to buy a tint you could only see when nothing was moving.
+            //
+            // `cardBottom` under `card()` is exactly how the icon is composited, so the widget and
+            // its icon now resolve to the same colour rather than merely sharing a gradient.
             ZStack {
-                Rectangle().fill(.ultraThinMaterial)
+                Palette.cardBottom
                 Palette.card()
             }
             // Attached to the background rather than the card so that buttons, which sit in

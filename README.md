@@ -272,6 +272,16 @@ in, and that is a flash worth avoiding. `DESKTOPCASINO_SPACES=member` puts widge
 the membership path without a rebuild, should a macOS update ever start compositing floaters
 above a transition regardless of level.
 
+Floating above the transition has one consequence worth spelling out, because it cost the card
+its frosted backdrop. Settled on the desktop the panel sits *below* every window, so the only
+thing behind it is the wallpaper. During a transition it is above the animation instead, and the
+two Spaces' windows slide behind it — so an `.ultraThinMaterial` backdrop, which samples whatever
+is behind the window, picked up any bright window passing underneath and lifted the whole card
+for the length of the slide. The backdrop is now opaque: `Palette.cardBottom` under
+`Palette.card()`, which is how the icon has always been composited, so the two finally resolve to
+the same colour instead of merely sharing a gradient. The frost only ever showed when nothing was
+moving, and it cost a visible flicker on every Space switch.
+
 `SkyLight.swift` binds its symbols by `dlsym` rather than linking, since SkyLight exists only in
 the dyld shared cache and a missing symbol should degrade to "unavailable" rather than break
 launch: `SLSMainConnectionID`, `SLSCopyManagedDisplaySpaces`, `SLSAddWindowsToSpaces`,

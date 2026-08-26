@@ -4,8 +4,8 @@ import SwiftUI
 
 /// Debug affordance: `DesktopCasino --snapshot out.png` renders the UI offscreen and exits.
 /// Useful for eyeballing layout without granting Screen Recording to capture a desktop-level
-/// window. The `.ultraThinMaterial` backdrop has nothing to sample offscreen, so the card
-/// reads slightly darker here than it does over a wallpaper.
+/// window. The card backdrop is opaque, so what this renders is what the panel looks like on a
+/// desktop — it no longer reads darker here than it does over a wallpaper.
 @MainActor
 enum Snapshot {
     static func writeIfRequested() -> Bool {
