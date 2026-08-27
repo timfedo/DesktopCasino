@@ -16,8 +16,18 @@ import SwiftUI
 final class StatsWindowController {
     private let machine: SlotMachine
 
-    /// Run after the window is shown. Activating the app pulls *all* of its windows forward, and
-    /// a widget-mode panel that jumps above everything is the whole bug this app exists to avoid.
+    /// Run after the window is shown, as insurance rather than a fix for anything observed.
+    ///
+    /// Widget mode holds `NSWindow.level` at `.normal` and pushes only the *server* level down,
+    /// and AppKit re-declares its own level whenever it orders the window — which is why the panel
+    /// re-pins itself inside `order(_:relativeTo:)` and on every mouse event. Showing this window
+    /// activates the app, which is another way into that same re-declaration.
+    ///
+    /// Measured on macOS 26.5, it does not appear to be: activating the app moved neither the
+    /// panel's server level nor its front-to-back position, sampled every 20ms for three seconds.
+    /// The modern `NSApp.activate()` is more conservative than the deprecated
+    /// `activate(ignoringOtherApps:)` it replaced. Kept anyway — it is idempotent, runs once per
+    /// window open, and the panel demonstrably does need re-pinning on the other AppKit paths.
     private let didActivate: () -> Void
 
     @ObservationIgnored private var window: NSWindow?
@@ -72,6 +82,11 @@ final class StatsWindowController {
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = Self.felt
         window.isReleasedWhenClosed = false
+        // The window outlives being closed, and a Space assignment outlives it too: opened on one
+        // Space and reopened from another, it would otherwise come back on the Space it was first
+        // opened on, dragging you there. The panel sidesteps this by joining every Space; an
+        // ordinary window should follow you to the one you are on instead.
+        window.collectionBehavior.insert(.moveToActiveSpace)
         window.contentMinSize = NSSize(width: 340, height: 380)
         window.contentView = NSHostingView(rootView: StatsScreen(machine: machine))
         window.setFrameAutosaveName("statsWindow")

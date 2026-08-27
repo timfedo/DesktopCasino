@@ -482,14 +482,23 @@ the traffic lights sit on it, and the window background is set to the colour the
 gradient starts at, because the strip behind the titlebar is drawn by the window rather than by
 the content view.
 
-Two consequences, both handled:
+Three consequences, all handled:
 
-- **Activation drags the panel forward.** Showing the window calls `NSApp.activate()`, and
-  activation brings *every* window the app owns to the front — including a widget-mode panel,
-  which is the exact bug this app exists to avoid. `DesktopPanel.reassertPlacement()` puts it
-  back, one runloop turn later so it lands after AppKit has finished its own ordering.
+- **A reused window keeps its Space.** The window outlives being closed, and so does its Space
+  assignment: opened on one Space and reopened from another, macOS switched *back* to the first
+  one and showed it there — measured, with `active` going 6 -> 5 on the click. The panel sidesteps
+  this by joining every Space, which is wrong for an ordinary window; `.moveToActiveSpace` makes
+  it follow you instead. With the flag, the same test leaves `active` at 6 and moves the window's
+  membership to `[6]`.
 - **There is no menu bar to route ⌘W.** The app is an `.accessory`, so the window would otherwise
   only close from its button. A local key monitor, installed while the window is up, closes it.
+- **Activation may re-declare the panel's level.** Showing the window activates the app, and
+  AppKit re-declares its own level whenever it orders a window — the same hazard the panel already
+  re-pins against in `order(_:relativeTo:)`. `DesktopPanel.reassertPlacement()` covers this path
+  too, one runloop turn later so it lands after AppKit's own ordering. Precautionary rather than
+  observed: sampling the panel's server level and front-to-back position every 20ms for three
+  seconds across an activation showed no change, and the modern `NSApp.activate()` is more
+  conservative than the deprecated `activate(ignoringOtherApps:)` it replaced.
 
 ## Snapshot tests
 
