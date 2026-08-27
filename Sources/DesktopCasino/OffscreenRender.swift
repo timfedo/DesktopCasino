@@ -30,6 +30,19 @@ enum OffscreenRender {
             render(WinSheet(), to: args[flag + 1])
             return true
         }
+        // `--stats` renders the stats window over a fixed fortnight of play, which a real ledger
+        // only reaches after a fortnight of playing.
+        if let flag = args.firstIndex(of: "--stats"), flag + 1 < args.count {
+            let today = Date()
+            render(
+                StatsView(ledger: .sample(endingOn: today), credits: 240, today: today,
+                          onReset: {})
+                    .frame(width: 400)
+                    .background { Palette.felt },
+                to: args[flag + 1]
+            )
+            return true
+        }
         return false
     }
 

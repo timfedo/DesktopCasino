@@ -6,10 +6,18 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let machine = SlotMachine()
     private var panel: DesktopPanel?
+    private var stats: StatsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panelRef = PanelRef()
-        let panel = DesktopPanel(content: CasinoView(machine: machine, panelRef: panelRef))
+        // Reaches the panel through the same weak box the view uses, so opening the stats window
+        // cannot be what keeps the panel alive.
+        let stats = StatsWindowController(machine: machine) { panelRef.panel?.reassertPlacement() }
+        self.stats = stats
+
+        let panel = DesktopPanel(
+            content: CasinoView(machine: machine, panelRef: panelRef, stats: stats)
+        )
         panelRef.panel = panel
         panel.restorePosition()
         panel.show()

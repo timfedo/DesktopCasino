@@ -137,6 +137,92 @@ struct SnapshotTests {
         #expect(differing > 0)
     }
 
+    // MARK: - Daily net chart
+
+    /// A fortnight with every case the chart has to draw in it: a big win, a big loss, a day that
+    /// came out exactly level, and days that were not played at all.
+    private static let chartSeries: [Ledger.DatedDay] = [
+        Ledger.DatedDay(key: "2026-08-14", day: Ledger.Day()),
+        Ledger.DatedDay(key: "2026-08-15", day: Ledger.Day(spins: 12, wagered: 60, won: 60)),
+        Ledger.DatedDay(key: "2026-08-16", day: Ledger.Day(spins: 20, wagered: 120, won: 380)),
+        Ledger.DatedDay(key: "2026-08-17", day: Ledger.Day(spins: 8, wagered: 80, won: 5)),
+        Ledger.DatedDay(key: "2026-08-18", day: Ledger.Day()),
+        Ledger.DatedDay(key: "2026-08-19", day: Ledger.Day(spins: 30, wagered: 150, won: 151)),
+        Ledger.DatedDay(key: "2026-08-20", day: Ledger.Day(spins: 44, wagered: 440, won: 120)),
+    ]
+
+    @Test("The chart draws gains above the line and losses below it")
+    func dailyNetChart() throws {
+        // Geometry only — no text anywhere in this view, which is what makes a reference
+        // recorded on one machine safe to compare on another.
+        try Snapshot.assert(
+            DailyNetChart(series: Self.chartSeries)
+                .padding(8)
+                .background(.black),
+            size: CGSize(width: 200, height: 82),
+            named: "chart-daily-net"
+        )
+    }
+
+    @Test("A chart with nothing in it still draws its zero line")
+    func emptyDailyNetChart() throws {
+        try Snapshot.assert(
+            DailyNetChart(series: Self.chartSeries.map {
+                Ledger.DatedDay(key: $0.key, day: Ledger.Day())
+            })
+            .padding(8)
+            .background(.black),
+            size: CGSize(width: 200, height: 82),
+            named: "chart-daily-net-empty"
+        )
+    }
+
+    // MARK: - Stats screen
+
+    /// UTC, so the ledger buckets into the same days whatever the runner's time zone is, and a
+    /// fixed "today" so the chart window and the TODAY tile are the same fortnight every run.
+    private static var utc: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    private static let statsDay = utc.date(
+        from: DateComponents(year: 2026, month: 8, day: 27, hour: 12)
+    )!
+
+    /// No explicit size: the board's height is its content's, so the render *is* the layout and a
+    /// card that grew shows up as a size mismatch rather than as a wall of moved pixels.
+    private static func statsBoard(_ ledger: Ledger) -> some View {
+        StatsView(
+            ledger: ledger,
+            session: Ledger.Day(spins: 14, wagered: 90, won: 145),
+            credits: 240,
+            today: statsDay,
+            calendar: utc,
+            // Inert, but present: the footer's reset button only draws when a handler is, and it
+            // is part of the screen the reference is here to pin.
+            onReset: {}
+        )
+        .frame(width: 400)
+        .background { Palette.felt }
+    }
+
+    @Test("The stats screen over a fortnight of play")
+    func statsScreen() throws {
+        try Snapshot.assert(
+            Self.statsBoard(.sample(endingOn: Self.statsDay, calendar: Self.utc)),
+            named: "stats-screen"
+        )
+    }
+
+    @Test("The stats screen before the first spin")
+    func statsScreenEmpty() throws {
+        // The state every install starts in, and the one easiest to leave showing a wall of
+        // zeroes and a best day of "—" instead of an invitation.
+        try Snapshot.assert(Self.statsBoard(Ledger()), named: "stats-screen-empty")
+    }
+
     // MARK: - Symbols
 
     @Test("The seven renders as a red numeral, not a keycap emoji")

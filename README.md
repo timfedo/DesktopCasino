@@ -23,6 +23,9 @@ The header's pin button cycles three **placements**, persisted across launches:
 Widget mode is the interesting one, and most of this README is about why it is hard — see
 [Widget mode](#widget-mode-below-everything-and-still-clickable).
 
+The chart button in the top right opens **[statistics](#statistics)** — best day, a fortnight of
+daily net, and what the machine has actually paid you — in an ordinary window.
+
 ## Run
 
 ```sh
@@ -40,6 +43,10 @@ swift run DesktopCasino --faces /tmp/faces.png
 
 # Render the three-of-a-kind marquee without waiting for a 1-in-21 spin.
 swift run DesktopCasino --win /tmp/win.png
+
+# Render the stats screen over a fixed fortnight of play, which a real ledger only
+# reaches after a fortnight of playing.
+swift run DesktopCasino --stats /tmp/stats.png
 ```
 
 Handy environment variables: `DESKTOPCASINO_MODE=normal|floating|widget` forces a placement (the
@@ -426,17 +433,78 @@ display refresh for as long as it is mounted, so leaving the marquee up until th
 one lucky spin left an idle desktop widget animating forever. For an always-on widget that is the
 difference between free and a battery cost. It is skipped entirely when Reduce Motion is on.
 
+## Statistics
+
+The chart button in the header opens the ledger. It shows, in this order:
+
+- **Best day** — the highest net any single calendar day has produced, with its date and how many
+  spins it took. The headline the rest of the screen is arranged around.
+- **Today, session, all time** — the same figure over three horizons. Session is per launch and
+  is not persisted; "this session" means this run of the app.
+- **Last 14 days** — net per day as bars either side of a zero line, gold above and red below,
+  scaled to the biggest swing in view rather than a fixed ceiling.
+- **Bankroll** — credits now, the best balance ever held, how many times the bank ran dry, and
+  the biggest single payout with the symbol that paid it.
+- **Spins** — spins, staked, paid out, return rate, win rate, push rate.
+- **Streaks** — the current run, the best winning run, and the longest cold one.
+- **Landings** — three-of-a-kind counts per symbol, then pairs and blanks.
+
+Four decisions in there worth stating:
+
+**Days are bucketed when the spin resolves, in the local calendar.** That is what "today" and
+"best day" have to mean for someone reading their own history. Storing instants and bucketing at
+read time would silently re-file everything the first time the machine changed time zone.
+
+**Win rate and push rate are separate figures.** A 1x pair pays the stake back and is 36% of all
+spins; folding those into a single "win rate" would report about half the spins as wins. Same
+reasoning as the muted `±0` on the machine itself — see [Playing](#playing).
+
+**Best day is the highest net, not the best day you had.** A ledger of nothing but losing days
+still reports one: its least bad. The alternative is a headline that reads `—` for anyone having
+a bad fortnight, which is when they are most likely to open it.
+
+**The stored ledger decodes key by key.** Every field is read with `decodeIfPresent` and falls
+back to a default, so a ledger written by an older build — missing whatever has been added since
+— loads rather than throwing. Throwing is indistinguishable from "no history" and would quietly
+wipe a real record on upgrade. A blob that will not decode at all is discarded for the same
+reason: losing a history nobody can read beats refusing to launch.
+
+History is capped at 180 days, oldest dropped first; lifetime totals are not capped. Resetting
+clears the record and leaves the bank alone — the ledger is a diary, not currency.
+
+### Why the stats window is an ordinary window
+
+Everything else in this app fights AppKit to sit *below* other windows. The stats window does the
+opposite: `.titled`, closable, resizable, key. The machine is a widget you leave lying on the
+desktop; the ledger is something you open, read and close, and it should behave like every other
+window while it is up. The titlebar is transparent and untitled so the felt runs to the top and
+the traffic lights sit on it, and the window background is set to the colour the content's own
+gradient starts at, because the strip behind the titlebar is drawn by the window rather than by
+the content view.
+
+Two consequences, both handled:
+
+- **Activation drags the panel forward.** Showing the window calls `NSApp.activate()`, and
+  activation brings *every* window the app owns to the front — including a widget-mode panel,
+  which is the exact bug this app exists to avoid. `DesktopPanel.reassertPlacement()` puts it
+  back, one runloop turn later so it lands after AppKit has finished its own ordering.
+- **There is no menu bar to route ⌘W.** The app is an `.accessory`, so the window would otherwise
+  only close from its button. A local key monitor, installed while the window is up, closes it.
+
 ## Snapshot tests
 
 `swift test` includes pixel snapshots of the drawing that arithmetic cannot pin. Two layers of
 them:
 
 - **Components** — the reel at rest, mid-travel and settling; the marquee at several phases, both
-  full-frame and cropped hard to a corner; the seven's numeral face.
+  full-frame and cropped hard to a corner; the seven's numeral face; the daily-net chart, with a
+  gain, a loss, a day that came out level and days that were not played at all.
 - **The whole window** — the assembled card in each state a player can see it in: idle, mid-spin,
   a loss, a push, a 2x pair, a triple, the jackpot, an empty balance, and a balance too small for
-  the larger chips. Plus a hard crop of the two window controls, which are 13pt across and would
+  the larger chips. Plus a hard crop of each corner's controls, which are 13pt across and would
   otherwise be lost in the noise of a 264x372 card.
+- **The stats screen** — the whole board over a fixed fortnight of play, and the empty state a
+  fresh install opens on.
 
 References live in `Tests/CasinoKitTests/__Snapshots__/`.
 
@@ -451,7 +519,16 @@ What makes them worth having rather than a liability:
 - **Window states are staged, not played for.** `SlotMachine.stage(landings:credits:bet:)` parks
   the machine on an exact result through the same payout table a real spin resolves against, so
   the symbols on the reels always agree with the line printed underneath — and no snapshot waits
-  two and a half seconds on a die roll.
+  two and a half seconds on a die roll. Staging is a rendering concern and is *not* recorded in
+  the ledger; a snapshot run must not hand anyone free credits or a fabricated best day.
+- **The stats screen takes its ledger, its "today" and its calendar as arguments.** Half of that
+  screen is relative to the current date, so it renders against `Ledger.sample(endingOn:)` — a
+  fixed fortnight played out through the real strip and the real paytable — pinned to a fixed day
+  in UTC. The same sample backs `--stats`, so the picture a human eyeballs and the picture the
+  test compares can never drift apart.
+- **The board is not the scroll view.** `ImageRenderer` does not lay out a `ScrollView`'s
+  content — every offscreen render of the stats screen came back as an empty gradient until the
+  scrolling moved up into `StatsScreen` and `StatsView` became the bare board.
 - **The window renders at its own height.** The card sizes itself from its content and the panel
   follows, so the snapshots are taken with no frame at all: a stack that grew fails as a size
   mismatch, naming both heights, rather than as a wall of moved pixels.
@@ -508,8 +585,10 @@ Three targets: a library both binaries share, and one executable each.
 ```
 Sources/CasinoKit/            Shared, and the only part under test
   Reel.swift                  Symbols, weighted strip, seeded RNG
-  Palette.swift               Colours, card backdrop, SymbolFace
+  Palette.swift               Colours, card backdrop, felt, SymbolFace
   SlotMachine.swift           @Observable game state, spin scheduling, payouts
+  Ledger.swift                Persistent play record, day buckets, sample data
+  StatsView.swift             The stats board, the daily-net chart, number formatting
   RoundedRectOutline.swift    Analytic arc-length walk of a rounded rect
 
 Sources/DesktopCasino/        The widget
@@ -518,7 +597,8 @@ Sources/DesktopCasino/        The widget
   DesktopPanel.swift          Placement modes, SkyLight level and Space membership
   SkyLight.swift              dlsym bindings to the private window-server API
   CasinoView.swift            SwiftUI UI, the Animatable reel, the win marquee
-  OffscreenRender.swift       --snapshot / --faces / --win offscreen renderers
+  StatsWindow.swift           The ordinary window the stats screen opens in
+  OffscreenRender.swift       --snapshot / --faces / --win / --stats renderers
 
 Sources/IconDesigner/         The icon tool
   main.swift                  Window bootstrap, --render headless path
@@ -529,9 +609,10 @@ Sources/IconDesigner/         The icon tool
 Tests/CasinoKitTests/         swift test
   PayoutTests.swift           Pins RTP 48/49 and the outcome rates exhaustively
   OutlineTests.swift          Closure, unit normals, continuity across corner seams
-  SlotMachineTests.swift      Debit/refund, persistence, resting-stop invariant
+  SlotMachineTests.swift      Debit/refund, persistence, resting-stop invariant, ledger
+  LedgerTests.swift           Day buckets, best day, streaks, pruning, tolerant decoding
   SnapshotSupport.swift       Offscreen render and tolerance-based image comparison
-  SnapshotTests.swift         Reels, marquee phases and corners, the seven's face
+  SnapshotTests.swift         Reels, marquee, the seven's face, the chart, the stats board
   WindowSnapshotTests.swift   The assembled card in every state, and its controls
   __Snapshots__/              Committed reference PNGs
 ```
