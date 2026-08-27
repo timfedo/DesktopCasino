@@ -484,12 +484,19 @@ the content view.
 
 Three consequences, all handled:
 
-- **A reused window keeps its Space.** The window outlives being closed, and so does its Space
-  assignment: opened on one Space and reopened from another, macOS switched *back* to the first
-  one and showed it there — measured, with `active` going 6 -> 5 on the click. The panel sidesteps
-  this by joining every Space, which is wrong for an ordinary window; `.moveToActiveSpace` makes
-  it follow you instead. With the flag, the same test leaves `active` at 6 and moves the window's
-  membership to `[6]`.
+- **A reused window keeps its Space.** The window outlives being closed and so does its Space
+  assignment, so reopening a stale one from another Space switched *back* to the first Space and
+  showed it there — measured, `active` going 6 -> 5 on the click. `open()` therefore discards a
+  window that is not `isOnActiveSpace` and builds a fresh one, which opens on the Space you are
+  looking at. Verified by the window id changing and `active` staying put.
+
+  **Not** `.moveToActiveSpace`, which is the obvious flag and was tried first. It fixes reopening
+  and breaks something worse: it relocates the window into whichever Space you return to, and an
+  *arriving* window lands behind the ones already there, so coming back to the Space left the
+  stats window behind every other window on it. A/B against a build with the single line removed:
+  with the flag, returning put Safari in front of it; without, it kept its slot at the front. Same
+  member-versus-arrival distinction as [All Spaces](#all-spaces-floater-or-member), biting the
+  other way — a window *created* on a Space is a member of it and keeps its z-order there.
 - **There is no menu bar to route ⌘W.** The app is an `.accessory`, so the window would otherwise
   only close from its button. A local key monitor, installed while the window is up, closes it.
 - **Activation may re-declare the panel's level.** Showing the window activates the app, and

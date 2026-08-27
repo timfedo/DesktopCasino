@@ -53,6 +53,22 @@ final class StatsWindowController {
     }
 
     func open() {
+        // A window keeps the Space it was opened on, so reopening a stale one from another Space
+        // switches you back there instead of opening in front of you. Rebuilding is the fix;
+        // `.moveToActiveSpace` is not. That flag relocates the window into whichever Space you
+        // return to, and an *arriving* window lands behind the ones already there — measured, it
+        // came back behind the windows it had been in front of, every time. It is the same
+        // member-versus-arrival distinction `DesktopPanel` documents, biting the other way. A
+        // window created on the Space is a member of it and keeps its z-order slot.
+        //
+        // The observer goes first: `close()` posts `willClose` on the main *queue*, so a stale
+        // one could arrive after this open finished and set `isOpen` back to false.
+        if let existing = window, !existing.isOnActiveSpace {
+            forgetCloseObserver()
+            existing.close()
+            self.window = nil
+        }
+
         let window = self.window ?? makeWindow()
         self.window = window
 
@@ -81,12 +97,11 @@ final class StatsWindowController {
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = Self.felt
+        // Left at the AppKit default on purpose. This is an ordinary window and should be
+        // treated as one: a real member of the Space it was opened on, keeping its place in that
+        // Space's z-order when you come back to it. See `open()` for what handles reopening from
+        // somewhere else, and why the obvious flag for it is wrong.
         window.isReleasedWhenClosed = false
-        // The window outlives being closed, and a Space assignment outlives it too: opened on one
-        // Space and reopened from another, it would otherwise come back on the Space it was first
-        // opened on, dragging you there. The panel sidesteps this by joining every Space; an
-        // ordinary window should follow you to the one you are on instead.
-        window.collectionBehavior.insert(.moveToActiveSpace)
         window.contentMinSize = NSSize(width: 340, height: 380)
         window.contentView = NSHostingView(rootView: StatsScreen(machine: machine))
         window.setFrameAutosaveName("statsWindow")
@@ -117,6 +132,11 @@ final class StatsWindowController {
             window.close()
             return nil
         }
+    }
+
+    private func forgetCloseObserver() {
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
     }
 
     private func removeKeyMonitor() {
