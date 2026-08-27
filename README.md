@@ -528,6 +528,12 @@ References live in `Tests/CasinoKitTests/__Snapshots__/`.
 SNAPSHOT_RECORD=1 swift test   # re-record after a deliberate visual change, then eyeball the diff
 ```
 
+Re-record every reference a change reaches, not only the ones that failed. A small control moves
+well under the tolerance on a whole-card reference, so the card keeps passing while its image
+still shows the old drawing — which is how the stats glyph stayed 8pt in `window-hovered` for a
+commit after it had been changed to 6.5pt. Recording writes all of them; revert the ones your
+change could not have touched, rather than keeping the ones that merely still pass.
+
 What makes them worth having rather than a liability:
 
 - **`MarqueeFrame` takes an explicit phase and pulse.** `WinMarquee` wraps it in
