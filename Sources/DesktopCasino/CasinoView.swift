@@ -148,6 +148,10 @@ struct CasinoView: View {
     private struct ControlButton: View {
         let symbol: String
         let tint: Color
+        /// Per button, because SF Symbols do not share a bounding box. `xmark` and `pin` are
+        /// sparse marks that need 8pt to read at all; `chart.bar.fill` is a solid block that at
+        /// the same size runs to the edge of the 13pt circle and looks cropped.
+        var glyphSize: CGFloat = 8
         /// Keeps the button lit while not hovered, for a mode that is currently engaged.
         var active = false
         let help: String
@@ -160,7 +164,7 @@ struct CasinoView: View {
         var body: some View {
             Button(action: action) {
                 Image(systemName: symbol)
-                    .font(.system(size: 8, weight: .black))
+                    .font(.system(size: glyphSize, weight: .black))
                     .foregroundStyle(lit ? .black.opacity(0.75) : .white.opacity(0.5))
                     .frame(width: 13, height: 13)
                     .background(lit ? tint : Color.white.opacity(0.15), in: .circle)
@@ -211,6 +215,7 @@ struct CasinoView: View {
                 ControlButton(
                     symbol: "chart.bar.fill",
                     tint: gold,
+                    glyphSize: 6.5,
                     // Stays lit while the stats window is up, so the button reads as the thing
                     // that opened it rather than a control that did nothing.
                     active: statsOpen,
