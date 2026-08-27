@@ -179,6 +179,26 @@ struct WindowSnapshotTests {
         )
     }
 
+    /// The opposite corner, where the stats button lives on its own.
+    private static func statsCorner(hovered: Bool) -> some View {
+        window(freshMachine(), hovered: hovered)
+            .fixedSize()
+            .frame(width: controlsCrop.width, height: controlsCrop.height, alignment: .topTrailing)
+            .clipped()
+    }
+
+    @Test("The stats button, up close", arguments: [false, true])
+    func statsControl(hovered: Bool) throws {
+        // Same reasoning as the controls crop: one 13pt button is invisible against the whole
+        // card. It gets its own close-up so that losing it, or lighting it at the wrong time,
+        // fails loudly.
+        try Snapshot.assert(
+            Self.statsCorner(hovered: hovered),
+            size: Self.controlsCrop,
+            named: "window-stats-\(hovered ? "hovered" : "idle")"
+        )
+    }
+
     @Test("The chrome really is hidden until the pointer arrives")
     func chromeIsHiddenUntilHovered() throws {
         let bare = try #require(

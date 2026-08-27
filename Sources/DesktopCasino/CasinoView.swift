@@ -8,6 +8,9 @@ struct CasinoView: View {
     /// frame, and it left `mode` with two sources of truth synced only on appear. Held weakly
     /// through a box, since the panel hosts this very view and would otherwise retain itself.
     var panelRef = PanelRef()
+    /// Owns the stats window. Absent in renders and tests, where the button still draws — it is
+    /// part of the chrome the window snapshots are there to guard — and simply does nothing.
+    var stats: StatsWindowController?
     /// Forces the hover state on for offscreen renders, where there is no pointer to hover with.
     var alwaysHovered = false
     /// Marks a render as a still, which suppresses the win celebration.
@@ -30,6 +33,8 @@ struct CasinoView: View {
     private var showsChrome: Bool { hovering || alwaysHovered }
 
     private var panel: DesktopPanel? { panelRef.panel }
+
+    private var statsOpen: Bool { stats?.isOpen == true }
     /// Drops back to false a minute after a win. `TimelineView(.animation)` asks for a frame at
     /// display refresh for as long as the marquee is mounted, so leaving it up until the next
     /// spin means an idle desktop widget animating forever.
@@ -143,6 +148,10 @@ struct CasinoView: View {
     private struct ControlButton: View {
         let symbol: String
         let tint: Color
+        /// Per button, because SF Symbols do not share a bounding box. `xmark` and `pin` are
+        /// sparse marks that need 8pt to read at all; `chart.bar.fill` is a solid block that at
+        /// the same size runs to the edge of the 13pt circle and looks cropped.
+        var glyphSize: CGFloat = 8
         /// Keeps the button lit while not hovered, for a mode that is currently engaged.
         var active = false
         let help: String
@@ -155,7 +164,7 @@ struct CasinoView: View {
         var body: some View {
             Button(action: action) {
                 Image(systemName: symbol)
-                    .font(.system(size: 8, weight: .black))
+                    .font(.system(size: glyphSize, weight: .black))
                     .foregroundStyle(lit ? .black.opacity(0.75) : .white.opacity(0.5))
                     .frame(width: 13, height: 13)
                     .background(lit ? tint : Color.white.opacity(0.15), in: .circle)
@@ -168,7 +177,8 @@ struct CasinoView: View {
     }
 
     /// Controls sit top-left with close outermost, mirroring the native traffic lights, and the
-    /// title is centred in the remaining width like a real titlebar.
+    /// title is centred in the remaining width like a real titlebar. Stats sits alone on the
+    /// right, away from anything that closes or moves the window.
     private var header: some View {
         ZStack {
             Text("DESKTOP CASINO")
@@ -201,6 +211,19 @@ struct CasinoView: View {
                 .opacity(showsChrome || mode != .normal ? 1 : 0)
 
                 Spacer()
+
+                ControlButton(
+                    symbol: "chart.bar.fill",
+                    tint: gold,
+                    glyphSize: 6.5,
+                    // Stays lit while the stats window is up, so the button reads as the thing
+                    // that opened it rather than a control that did nothing.
+                    active: statsOpen,
+                    help: statsOpen ? "Close the statistics window" : "Statistics"
+                ) {
+                    stats?.toggle()
+                }
+                .opacity(showsChrome || statsOpen ? 1 : 0)
             }
         }
     }

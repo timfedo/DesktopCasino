@@ -124,4 +124,100 @@ struct SlotMachineTests {
         #expect(machine.credits == SlotMachine.startingBank)
         #expect(machine.canSpin)
     }
+
+    // MARK: - Ledger
+
+    @Test("A resolved spin is filed in the ledger and in the session")
+    func spinIsRecorded() async throws {
+        let machine = SlotMachine(defaults: Self.scratchDefaults("ledger"))
+        #expect(machine.ledger.spins == 0)
+
+        machine.spin()
+        try await Self.settle(machine)
+
+        #expect(machine.ledger.spins == 1)
+        #expect(machine.ledger.wagered == machine.lastStake)
+        #expect(machine.ledger.won == machine.lastWin)
+        // The ledger's arithmetic has to agree with the bank's, or the stats window is telling a
+        // different story from the credits counter above it.
+        #expect(machine.ledger.net == machine.lastWin - machine.lastStake)
+        #expect(machine.session.spins == 1)
+        #expect(machine.session.net == machine.ledger.net)
+        #expect(machine.ledger.day(Date()).spins == 1)
+        #expect(machine.ledger.peakBank >= machine.credits)
+    }
+
+    @Test("Staging a result for a render does not touch the ledger")
+    func stagingIsNotRecorded() {
+        let machine = SlotMachine(defaults: Self.scratchDefaults("staged"))
+        machine.stage(landings: [0, 0, 0], credits: 500, bet: 25)
+
+        #expect(machine.spinCount == 1)
+        #expect(machine.ledger.spins == 0)
+        #expect(machine.session.spins == 0)
+    }
+
+    @Test("Going bust and refilling is counted")
+    func refillIsCounted() {
+        let defaults = Self.scratchDefaults("busts")
+        defaults.set(0, forKey: "credits")
+        let machine = SlotMachine(defaults: defaults)
+
+        machine.refill()
+        machine.refill()
+
+        #expect(machine.ledger.refills == 2)
+        #expect(machine.ledger.peakBank == machine.credits)
+    }
+
+    @Test("The ledger round-trips through the injected defaults")
+    func ledgerPersistence() async throws {
+        let defaults = Self.scratchDefaults("ledger-persist")
+        let machine = SlotMachine(defaults: defaults)
+        machine.spin()
+        try await Self.settle(machine)
+
+        let reloaded = SlotMachine(defaults: defaults)
+        #expect(reloaded.ledger == machine.ledger)
+        // The session is per launch, so it does not come back with the rest.
+        #expect(reloaded.session.spins == 0)
+    }
+
+    @Test("A corrupt stored ledger loads as an empty one rather than failing to launch")
+    func corruptLedgerIsDiscarded() {
+        let defaults = Self.scratchDefaults("corrupt")
+        defaults.set(Data("not json".utf8), forKey: "ledger")
+
+        let machine = SlotMachine(defaults: defaults)
+
+        #expect(machine.ledger == Ledger())
+        #expect(machine.credits == SlotMachine.startingBank)
+    }
+
+    @Test("Resetting the ledger clears the record and leaves the bank alone")
+    func resetKeepsCredits() async throws {
+        let machine = SlotMachine(defaults: Self.scratchDefaults("reset"))
+        machine.spin()
+        try await Self.settle(machine)
+        let banked = machine.credits
+
+        machine.resetLedger()
+
+        #expect(machine.credits == banked)
+        #expect(machine.ledger.spins == 0)
+        #expect(machine.ledger.days.isEmpty)
+        #expect(machine.session.spins == 0)
+        // Restarted at what is held, so the stats window never claims a peak below the balance
+        // printed on the machine.
+        #expect(machine.ledger.peakBank == banked)
+    }
+
+    /// Waits for a spin to resolve. See `netReconciles` for why this polls.
+    private static func settle(_ machine: SlotMachine) async throws {
+        let deadline = Date().addingTimeInterval(30)
+        while machine.isSpinning, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(!machine.isSpinning)
+    }
 }

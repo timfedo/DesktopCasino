@@ -192,6 +192,17 @@ final class DesktopPanel: NSPanel {
         joinEverySpace()
     }
 
+    /// Puts the panel back where its mode says it belongs.
+    ///
+    /// Called after the stats window opens, since showing it activates the app and AppKit
+    /// re-declares its own level whenever it orders a window. Precautionary: activation was not
+    /// measured to disturb the panel — see `StatsWindowController.didActivate` — but it is the
+    /// one AppKit path into widget mode that nothing else here covers.
+    func reassertPlacement() {
+        applyMode()
+        if mode != .floating { orderBack(nil) }
+    }
+
     /// Pushes the *window server* level down without telling AppKit, so the panel composites
     /// below everything while AppKit keeps routing mouse events to it as a `.normal` window.
     ///

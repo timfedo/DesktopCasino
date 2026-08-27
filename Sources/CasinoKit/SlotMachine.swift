@@ -23,6 +23,14 @@ public final class SlotMachine {
             if case .triple(let s) = self { return s.name == "diamond" }
             return false
         }
+
+        /// The symbol that scored, if one did.
+        public var symbol: Symbol? {
+            switch self {
+            case .pair(let s), .triple(let s): s
+            default: nil
+            }
+        }
     }
 
     public static let betSizes = [1, 5, 10, 25]
@@ -30,6 +38,7 @@ public final class SlotMachine {
 
     private static let creditsKey = "credits"
     private static let betKey = "bet"
+    private static let ledgerKey = "ledger"
 
     public private(set) var credits: Int
     public private(set) var reels = [ReelState](repeating: ReelState(), count: 3)
@@ -40,6 +49,12 @@ public final class SlotMachine {
     public private(set) var lastStake = 0
     public private(set) var isSpinning = false
     public private(set) var bet: Int
+
+    /// The persistent play record behind the stats window.
+    public private(set) var ledger: Ledger
+    /// Totals since launch. Deliberately not persisted: "this session" means this run of the app,
+    /// so it starts empty every time and sits next to today and all time in the stats window.
+    public private(set) var session = Ledger.Day()
 
     private let defaults: UserDefaults
 
@@ -54,6 +69,12 @@ public final class SlotMachine {
         let stored = defaults.object(forKey: Self.creditsKey) as? Int
         credits = stored ?? Self.startingBank
         bet = defaults.object(forKey: Self.betKey) as? Int ?? Self.betSizes[1]
+
+        // A ledger that will not decode is treated as no ledger. Refusing to launch, or throwing
+        // from here, would be a worse trade than losing a history nobody can read anyway.
+        ledger = (defaults.data(forKey: Self.ledgerKey)
+            .flatMap { try? JSONDecoder().decode(Ledger.self, from: $0) }) ?? Ledger()
+
         if !Self.betSizes.contains(bet) { bet = Self.betSizes[1] }
 
         // Distinct symbols, so a fresh install never opens on a three-of-a-kind. Distinct stops
@@ -88,6 +109,17 @@ public final class SlotMachine {
         credits += Self.startingBank
         lastWin = 0
         outcome = .idle
+        ledger.recordRefill(bank: credits)
+        save()
+    }
+
+    /// Clears the play record without touching the bank — the ledger is a diary, not currency.
+    /// The high-water mark restarts at what is held now rather than at zero, so the stats window
+    /// does not immediately claim a peak below the balance on screen.
+    public func resetLedger() {
+        ledger = Ledger()
+        ledger.peakBank = credits
+        session = Ledger.Day()
         save()
     }
 
@@ -137,14 +169,24 @@ public final class SlotMachine {
     }
 
     private func resolve(_ landings: [Int]) {
-        let (result, payout) = Self.score(landings, stake: bet)
+        let stake = bet
+        let (result, payout) = Self.score(landings, stake: stake)
         outcome = result
 
         credits += payout
         lastWin = payout
-        lastStake = bet
+        lastStake = stake
         isSpinning = false
         spinCount += 1
+
+        // Filed with the scored outcome rather than `outcome`, which `.broke` is about to
+        // overwrite, and with the post-payout balance so the high-water mark counts the spin
+        // that set it.
+        ledger.record(stake: stake, payout: payout, outcome: result, bank: credits)
+        session.spins += 1
+        session.wagered += stake
+        session.won += payout
+
         if credits < Self.betSizes[0] { outcome = .broke }
         if bet > credits, let affordable = Self.betSizes.last(where: { $0 <= credits }) {
             bet = affordable
@@ -189,6 +231,9 @@ public final class SlotMachine {
     public func save() {
         defaults.set(credits, forKey: Self.creditsKey)
         defaults.set(bet, forKey: Self.betKey)
+        if let encoded = try? JSONEncoder().encode(ledger) {
+            defaults.set(encoded, forKey: Self.ledgerKey)
+        }
     }
 
     // MARK: - Staging
