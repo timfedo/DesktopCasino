@@ -10,10 +10,15 @@ public struct StatsView: View {
     public var ledger: Ledger
     public var session: Ledger.Day
     public var credits: Int
+    /// Which table's record this is. The figures either side of the breakdown are the same for
+    /// both; what a "win" and a "landing" mean is not.
+    public var game: Casino.Game
     public var today: Date
     public var calendar: Calendar
     /// Absent in a render or a test, which is also what hides the reset button there.
     public var onReset: (@MainActor () -> Void)?
+    /// Absent when there is only one record to look at, which hides the picker.
+    public var onSelect: (@MainActor (Casino.Game) -> Void)?
 
     @State private var confirmingReset = false
 
@@ -21,16 +26,20 @@ public struct StatsView: View {
         ledger: Ledger,
         session: Ledger.Day = Ledger.Day(),
         credits: Int,
+        game: Casino.Game = .slots,
         today: Date = Date(),
         calendar: Calendar = .current,
-        onReset: (@MainActor () -> Void)? = nil
+        onReset: (@MainActor () -> Void)? = nil,
+        onSelect: (@MainActor (Casino.Game) -> Void)? = nil
     ) {
         self.ledger = ledger
         self.session = session
         self.credits = credits
+        self.game = game
         self.today = today
         self.calendar = calendar
         self.onReset = onReset
+        self.onSelect = onSelect
     }
 
     /// How many days the chart covers. Two weeks: long enough to see a shape, short enough that
@@ -49,6 +58,8 @@ public struct StatsView: View {
                 .foregroundStyle(Palette.gold.opacity(0.85))
                 .padding(.bottom, 2)
 
+            if onSelect != nil { tablePicker }
+
             if ledger.spins == 0 {
                 emptyState
             } else {
@@ -58,7 +69,7 @@ public struct StatsView: View {
                 bankrollCard
                 spinsCard
                 streakCard
-                landingsCard
+                breakdownCard
             }
 
             footer
@@ -69,13 +80,40 @@ public struct StatsView: View {
 
     // MARK: - Sections
 
+    /// Which table's record you are reading. Two records rather than one pooled total: the games
+    /// have different odds and a different idea of what a win is, so a combined return rate would
+    /// describe neither of them.
+    private var tablePicker: some View {
+        HStack(spacing: 5) {
+            ForEach(Casino.Game.allCases, id: \.self) { table in
+                let selected = game == table
+                Button {
+                    onSelect?(table)
+                } label: {
+                    Text(table.title)
+                        .font(.system(size: 9, weight: .heavy))
+                        .tracking(1.3)
+                        .foregroundStyle(selected ? .black.opacity(0.85) : .white.opacity(0.55))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 22)
+                        .background(selected ? Palette.gold : .white.opacity(0.07),
+                                    in: .rect(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: game)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Text("NO SPINS YET")
+            Text(game == .slots ? "NO SPINS YET" : "NO COUPS YET")
                 .font(.system(size: 11, weight: .heavy))
                 .tracking(1.8)
                 .foregroundStyle(.white.opacity(0.6))
-            Text("Take a spin and this fills in.")
+            Text(game == .slots
+                 ? "Take a spin and this fills in."
+                 : "Back a number and this fills in.")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.4))
         }
@@ -98,7 +136,7 @@ public struct StatsView: View {
                 .foregroundStyle(Self.tint(best?.day.net ?? 0))
 
             Text(best.map {
-                "\(Ledger.longLabel(forDay: $0.key)) · \(Format.count($0.day.spins, "spin"))"
+                "\(Ledger.longLabel(forDay: $0.key)) · \(Format.count($0.day.spins, game.roundNoun))"
             } ?? "nothing banked yet")
                 .font(.system(size: 10))
                 .foregroundStyle(.white.opacity(0.45))
@@ -119,9 +157,11 @@ public struct StatsView: View {
     private var netTiles: some View {
         let day = ledger.day(today, calendar: calendar)
         return HStack(spacing: 8) {
-            Tile(label: "TODAY", net: day.net, caption: Format.count(day.spins, "spin"))
-            Tile(label: "SESSION", net: session.net, caption: Format.count(session.spins, "spin"))
-            Tile(label: "ALL TIME", net: ledger.net, caption: Format.count(ledger.spins, "spin"))
+            Tile(label: "TODAY", net: day.net, caption: Format.count(day.spins, game.roundNoun))
+            Tile(label: "SESSION", net: session.net,
+                 caption: Format.count(session.spins, game.roundNoun))
+            Tile(label: "ALL TIME", net: ledger.net,
+                 caption: Format.count(ledger.spins, game.roundNoun))
         }
     }
 
@@ -157,17 +197,23 @@ public struct StatsView: View {
     }
 
     private var spinsCard: some View {
-        Card(title: "SPINS") {
-            Row(label: "Spins played", value: Format.grouped(ledger.spins))
+        Card(title: game == .slots ? "SPINS" : "COUPS") {
+            Row(label: game == .slots ? "Spins played" : "Coups played",
+                value: Format.grouped(ledger.spins))
             Row(label: "Staked", value: Format.grouped(ledger.wagered))
             Row(label: "Paid out", value: Format.grouped(ledger.won))
             Row(label: "Return", value: Format.percent(ledger.returnRate),
                 tint: Self.tint(ledger.net),
                 help: "Credits paid back per credit staked. Over 100% means you are up.")
             Row(label: "Win rate", value: Format.percent(ledger.gainRate),
-                help: "Share of spins that paid more than they cost.")
-            Row(label: "Push rate", value: Format.percent(ledger.pushRate),
-                help: "Share of spins that paid back exactly the stake — a 1x pair.")
+                help: "Share of rounds that paid more than they cost.")
+            // Only the slot machine has pushes. A roulette bet either pays or it does not, so the
+            // row would be a permanent 0.0% and read as a broken statistic rather than an absent
+            // concept.
+            if game == .slots {
+                Row(label: "Push rate", value: Format.percent(ledger.pushRate),
+                    help: "Share of spins that paid back exactly the stake — a 1x pair.")
+            }
         }
     }
 
@@ -176,11 +222,13 @@ public struct StatsView: View {
             Row(label: "Current run",
                 value: currentStreak.text,
                 tint: currentStreak.tint,
-                help: "Consecutive spins since the run changed direction.")
-            Row(label: "Best winning run", value: Format.count(ledger.longestWinStreak, "spin"),
+                help: "Consecutive rounds since the run changed direction.")
+            Row(label: "Best winning run",
+                value: Format.count(ledger.longestWinStreak, game.roundNoun),
                 tint: ledger.longestWinStreak > 0 ? Palette.gold : .white)
-            Row(label: "Longest cold run", value: Format.count(ledger.longestDrySpell, "spin"),
-                help: "The most spins in a row without a gain, pushes included.")
+            Row(label: "Longest cold run",
+                value: Format.count(ledger.longestDrySpell, game.roundNoun),
+                help: "The most rounds in a row without a gain, pushes included.")
         }
     }
 
@@ -192,6 +240,72 @@ public struct StatsView: View {
             return ("\(ledger.drySpell) cold", Palette.loss)
         }
         return ("—", .white.opacity(0.6))
+    }
+
+    @ViewBuilder
+    private var breakdownCard: some View {
+        switch game {
+        case .slots: landingsCard
+        case .roulette: pocketsCard
+        }
+    }
+
+    /// Where the ball has actually been, laid out on the felt so it is read the same way the bets
+    /// are placed. Deliberately captioned rather than left to speak for itself: a wheel that looks
+    /// lopsided over eighty coups is a wheel behaving normally, and a stats screen that implies
+    /// otherwise is teaching the gambler's fallacy.
+    private var pocketsCard: some View {
+        let hottest = ledger.hottestPocket
+        return Card(title: "POCKETS") {
+            PocketHeatGrid(pockets: ledger.pockets)
+
+            Text("where the ball landed — brighter is more often")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.3))
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 2)
+
+            HStack(spacing: 0) {
+                colorTally("RED", Palette.pocketRed, ledger.pocketHits(.red))
+                colorTally("BLACK", Palette.pocketBlack, ledger.pocketHits(.black))
+                colorTally("ZERO", Palette.pocketGreen, ledger.pocketHits(.green))
+            }
+            .padding(.bottom, 3)
+
+            Row(label: "Hottest number",
+                value: hottest.map { "\($0.number) · \(Format.count($0.hits, "hit"))" } ?? "—",
+                caption: hottest.map { _ in Format.percent(ledger.hottestShare) + " of coups" },
+                tint: Palette.gold,
+                help: "The number that has come up most. Over 1/37 means nothing on its own.")
+            Row(label: "Bets won", value: "\(ledger.gains)")
+            Row(label: "Bets lost", value: "\(max(0, ledger.spins - ledger.gains))")
+        }
+    }
+
+    private func colorTally(_ label: String, _ swatch: Color, _ hits: Int) -> some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(swatch)
+                    .overlay { Circle().strokeBorder(.white.opacity(0.35), lineWidth: 0.5) }
+                    .frame(width: 7, height: 7)
+                Text(label)
+                    .font(.system(size: 8, weight: .heavy))
+                    .tracking(1.2)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Text("\(hits)")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(hits > 0 ? .white : .white.opacity(0.3))
+            Text(ledger.coups > 0
+                 ? Format.percent(Double(hits) / Double(ledger.coups))
+                 : "—")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
     }
 
     private var landingsCard: some View {
@@ -395,6 +509,74 @@ public struct StatsView: View {
     }
 }
 
+/// Every pocket on the felt, tinted by how often the ball has landed in it.
+///
+/// Laid out exactly as `RouletteFelt` lays out the betting grid, so the shape you learn placing
+/// chips is the shape you read the history on. Free of text, like `DailyNetChart` and for the same
+/// reason: it is pure geometry, which renders identically on any machine.
+public struct PocketHeatGrid: View {
+    public var pockets: [Int: Int]
+    public var cell: CGSize
+    public var gap: CGFloat
+
+    public init(
+        pockets: [Int: Int],
+        cell: CGSize = CGSize(width: 26, height: 17),
+        gap: CGFloat = 2
+    ) {
+        self.pockets = pockets
+        self.cell = cell
+        self.gap = gap
+    }
+
+    public var body: some View {
+        // Scaled to the busiest pocket rather than to a fixed ceiling, so the grid reads at eighty
+        // coups and at eighty thousand.
+        let peak = max(pockets.values.max() ?? 0, 1)
+
+        HStack(spacing: gap) {
+            pocket(0)
+                .frame(width: cell.width * 0.8)
+                .frame(maxHeight: .infinity)
+
+            VStack(spacing: gap) {
+                ForEach(0..<RouletteLayout.rows, id: \.self) { row in
+                    HStack(spacing: gap) {
+                        ForEach(0..<RouletteLayout.columns, id: \.self) { column in
+                            if let number = RouletteLayout.number(column: column, row: row) {
+                                pocket(number, peak: peak)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: cell.height)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(height: cell.height * CGFloat(RouletteLayout.rows)
+               + gap * CGFloat(RouletteLayout.rows - 1))
+    }
+
+    private func pocket(_ number: Int, peak: Int = 1) -> some View {
+        let hits = pockets[number] ?? 0
+        // Square-rooted, not linear: over a real run most pockets sit close together and one or
+        // two run ahead, and a linear ramp renders that as a grid of near-black with a single
+        // bright cell. The root spreads the crowded low end out where the differences are.
+        let heat = peak > 0 ? pow(Double(hits) / Double(peak), 0.5) : 0
+        return RoundedRectangle(cornerRadius: 3)
+            // The felt's lifted black, not the wheel's. Ramping opacity on a near-black colour
+            // has nowhere to go: a black pocket with the most hits in the record would come out
+            // looking exactly like one with none.
+            .fill(RouletteFelt.feltPocket(number)
+                .opacity(hits == 0 ? 0.22 : 0.4 + 0.6 * heat))
+            .overlay {
+                RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(.white.opacity(hits == 0 ? 0.04 : 0.10), lineWidth: 0.5)
+            }
+            .help("\(number): \(hits == 1 ? "1 hit" : "\(hits) hits")")
+    }
+}
+
 /// Net per day as bars either side of a zero line: gold above, red below.
 ///
 /// Split out and free of text so the snapshot test that guards it compares pure geometry, which
@@ -466,10 +648,20 @@ public struct DailyNetChart: View {
 /// observation — the window is long-lived, and pulling the ledger out at construction time would
 /// freeze the numbers at whatever they were when it opened.
 public struct StatsScreen: View {
-    private let machine: SlotMachine
+    private let casino: Casino
+    /// Bumped by the window controller each time the window is shown. Used as a `task` identity,
+    /// which is what re-syncs the tab — the view is built once and reused, so an initial value
+    /// would only ever reflect the table you were at the *first* time you opened it.
+    private let opening: Int
 
-    public init(machine: SlotMachine) {
-        self.machine = machine
+    /// Which table's record is being read. Its own state rather than the casino's `game`, so you
+    /// can look over your roulette history while the widget sits at the slot machine; picking a
+    /// table to *read* is not picking one to play.
+    @State private var showing: Casino.Game = .slots
+
+    public init(casino: Casino, opening: Int = 0) {
+        self.casino = casino
+        self.opening = opening
     }
 
     public var body: some View {
@@ -477,14 +669,20 @@ public struct StatsScreen: View {
             // "Today" is resolved per update rather than on a clock. Every figure here changes on
             // a spin anyway, and a window left open across midnight rolls over on the next one.
             StatsView(
-                ledger: machine.ledger,
-                session: machine.session,
-                credits: machine.credits,
+                ledger: casino.ledger(for: showing),
+                session: casino.session(for: showing),
+                credits: casino.bank.credits,
+                game: showing,
                 today: Date(),
-                onReset: { machine.resetLedger() }
+                onReset: { casino.resetLedger(for: showing) },
+                onSelect: { showing = $0 }
             )
         }
         .background { Palette.felt }
+        // Every open lands on the table the widget is showing — that is the one you were
+        // wondering about when you clicked the button. Switching tabs in here afterwards sticks
+        // until the next open.
+        .task(id: opening) { showing = casino.game }
     }
 }
 

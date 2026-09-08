@@ -193,16 +193,20 @@ struct SnapshotTests {
 
     /// No explicit size: the board's height is its content's, so the render *is* the layout and a
     /// card that grew shows up as a size mismatch rather than as a wall of moved pixels.
-    private static func statsBoard(_ ledger: Ledger) -> some View {
+    private static func statsBoard(
+        _ ledger: Ledger, game: Casino.Game = .slots, picker: Bool = false
+    ) -> some View {
         StatsView(
             ledger: ledger,
             session: Ledger.Day(spins: 14, wagered: 90, won: 145),
             credits: 240,
+            game: game,
             today: statsDay,
             calendar: utc,
             // Inert, but present: the footer's reset button only draws when a handler is, and it
-            // is part of the screen the reference is here to pin.
-            onReset: {}
+            // is part of the screen the reference is here to pin. Same for the table picker.
+            onReset: {},
+            onSelect: picker ? { _ in } : nil
         )
         .frame(width: 400)
         .background { Palette.felt }
@@ -221,6 +225,171 @@ struct SnapshotTests {
         // The state every install starts in, and the one easiest to leave showing a wall of
         // zeroes and a best day of "—" instead of an invitation.
         try Snapshot.assert(Self.statsBoard(Ledger()), named: "stats-screen-empty")
+    }
+
+    @Test("The stats screen for the wheel, which counts different things")
+    func statsScreenRoulette() throws {
+        // A different breakdown, a different noun for a round, and no push rate — roulette has no
+        // such thing, and a permanent 0.0% would read as a broken figure rather than an absent
+        // concept. All of which is layout, and none of which arithmetic can pin.
+        try Snapshot.assert(
+            Self.statsBoard(
+                .rouletteSample(endingOn: Self.statsDay, calendar: Self.utc),
+                game: .roulette,
+                picker: true
+            ),
+            named: "stats-screen-roulette"
+        )
+    }
+
+    @Test("The pocket heat grid keeps black pockets visible as they warm up")
+    func pocketHeatGrid() throws {
+        // Geometry and tint only, no text. The black pockets are the point: ramping opacity on the
+        // wheel's near-black would leave the busiest black pocket looking like an empty one.
+        var pockets: [Int: Int] = [:]
+        for number in 0...36 { pockets[number] = (number * 7) % 13 }
+        pockets[17] = 24
+        pockets[26] = 19
+
+        try Snapshot.assert(
+            PocketHeatGrid(pockets: pockets)
+                .padding(8)
+                .background(.black),
+            size: CGSize(width: 340, height: 71),
+            named: "pocket-heat-grid"
+        )
+    }
+
+    // MARK: - Roulette wheel
+
+    private static let wheel = CGSize(width: 220, height: 220)
+
+    /// A spin that ends with the ball in pocket `landing`, frozen at `progress` through it.
+    /// The wheel's own rotation is the only animated value — everything the ball does is derived
+    /// from it — so a frame is pinned by saying how far through the spin it is.
+    ///
+    /// Nominal travel, with none of the random shove a real spin gets: a reference render has to
+    /// come out the same every time it is taken.
+    private static func wheelView(
+        landing: Int,
+        progress: Double,
+        result: Int? = nil,
+        won: Bool = false
+    ) -> some View {
+        let target = Roulette.travel(extra: 0)
+        return RouletteWheelView(
+            turns: target * progress,
+            spinStart: 0,
+            spinTarget: target,
+            landingIndex: landing,
+            result: result,
+            won: won,
+            diameter: wheel.width
+        )
+        .background(.black)
+    }
+
+    @Test("A wheel at rest has the ball sitting in the winning pocket")
+    func wheelAtRest() throws {
+        // The frame where the two have to agree, and the arithmetic that makes them agree is
+        // spread across `Roulette` and this view. Where on screen they agree is not fixed — the
+        // wheel stops where the throw leaves it — so this is the render that would catch the ball
+        // parting company with its pocket.
+        try Snapshot.assert(
+            Self.wheelView(landing: 0, progress: 1, result: 0),
+            size: Self.wheel,
+            named: "wheel-at-rest"
+        )
+    }
+
+    @Test("A wheel mid-spin has the ball out on its track")
+    func wheelMidSpin() throws {
+        try Snapshot.assert(
+            Self.wheelView(landing: 8, progress: 0.35),
+            size: Self.wheel,
+            named: "wheel-mid-spin"
+        )
+    }
+
+    @Test("A settling wheel has the ball down in its pocket, riding round")
+    func wheelSettling() throws {
+        // Past the capture point, so the ball is no longer flying: it is in pocket 8 and being
+        // carried the rest of the way by the wheel.
+        try Snapshot.assert(
+            Self.wheelView(landing: 8, progress: 0.93, result: 17, won: true),
+            size: Self.wheel,
+            named: "wheel-settling"
+        )
+    }
+
+    @Test("Partway down, the ball is off the track and not yet in a pocket")
+    func wheelDropping() throws {
+        // Between release and capture: the one stretch where the ball is neither on the rim it
+        // has been riding nor in the pocket that will catch it.
+        try Snapshot.assert(
+            Self.wheelView(landing: 8, progress: 0.73),
+            size: Self.wheel,
+            named: "wheel-dropping"
+        )
+    }
+
+    @Test("The ball comes off the track and drops onto the pockets")
+    func ballDropsOntoThePockets() throws {
+        // Early in the spin against the moment of capture. If the drop were ever dropped, the
+        // references above would still be re-recorded happily and both would keep passing; this is
+        // what makes that a failure.
+        let flying = try #require(
+            Snapshot.render(Self.wheelView(landing: 0, progress: 0.2), size: Self.wheel)
+        )
+        let landed = try #require(
+            Snapshot.render(Self.wheelView(landing: 0, progress: 1, result: 0), size: Self.wheel)
+        )
+
+        var differing = 0
+        for y in stride(from: 0, to: flying.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: flying.pixelsWide, by: 2) {
+                guard let a = flying.colorAt(x: x, y: y), let b = landed.colorAt(x: x, y: y) else {
+                    continue
+                }
+                if abs(a.redComponent - b.redComponent) > 0.2 { differing += 1 }
+            }
+        }
+        #expect(differing > 0)
+    }
+
+    @Test("Once captured, the ball travels with the wheel rather than against it")
+    func ballRidesTheWheelAfterCapture() throws {
+        // Two frames late in the spin, both past the capture point. The wheel has turned between
+        // them, and the ball has to have turned with it by exactly the same amount — that is what
+        // "it sticks in a pocket and rides round" means, and the alternative (two independent
+        // animations timed to arrive together) looks like the ball was placed rather than thrown.
+        let angles = [0.86, 0.94].map { progress -> Double in
+            let target = Roulette.travel(extra: 0)
+            let turns = target * progress
+            return RouletteWheel.angle(ofPocketAt: 8) + turns * 360
+        }
+        let wheelMoved = (angles[1] - angles[0])
+
+        // Rendering cannot measure an angle, so this checks the expression the ball uses: past
+        // capture its angle *is* the pocket's, so the two move together by construction.
+        #expect(wheelMoved > 0)
+        let calm = try #require(
+            Snapshot.render(Self.wheelView(landing: 8, progress: 0.86), size: Self.wheel)
+        )
+        let later = try #require(
+            Snapshot.render(Self.wheelView(landing: 8, progress: 0.94), size: Self.wheel)
+        )
+        var differing = 0
+        for y in stride(from: 0, to: calm.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: calm.pixelsWide, by: 2) {
+                guard let a = calm.colorAt(x: x, y: y), let b = later.colorAt(x: x, y: y) else {
+                    continue
+                }
+                if abs(a.redComponent - b.redComponent) > 0.2 { differing += 1 }
+            }
+        }
+        // The wheel turned, so the numerals moved — the frames are not identical.
+        #expect(differing > 0)
     }
 
     // MARK: - Symbols

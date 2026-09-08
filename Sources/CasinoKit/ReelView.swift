@@ -18,8 +18,12 @@ public struct ReelView: View, @MainActor Animatable {
         self.spinTarget = spinTarget
     }
 
-    public static let width: CGFloat = 62
-    public static let stopHeight: CGFloat = 66
+    public static let width: CGFloat = 76
+    public static let stopHeight: CGFloat = 78
+
+    /// Grown with the drum. Left at the default 32 the symbols floated in the middle of a taller
+    /// window with a ring of dead space round them.
+    public static let symbolSize: CGFloat = 38
 
     public var animatableData: Double {
         get { position }
@@ -42,7 +46,7 @@ public struct ReelView: View, @MainActor Animatable {
             ForEach(-1...2, id: \.self) { k in
                 let slot = base + k
                 let index = ((slot % stops) + stops) % stops
-                SymbolFace(symbol: Reel.strip[index])
+                SymbolFace(symbol: Reel.strip[index], pointSize: Self.symbolSize)
                     .frame(width: Self.width, height: Self.stopHeight)
                     .offset(y: CGFloat(position - Double(slot)) * Self.stopHeight)
             }

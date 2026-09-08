@@ -15,7 +15,28 @@ enum OffscreenRender {
         let args = CommandLine.arguments
         if let flag = args.firstIndex(of: "--snapshot"), flag + 1 < args.count {
             render(
-                CasinoView(machine: SlotMachine(), alwaysHovered: true, isStill: true),
+                CasinoView(casino: Casino(), alwaysHovered: true, isStill: true),
+                to: args[flag + 1]
+            )
+            return true
+        }
+        // `--roulette` renders the other table, which `--snapshot` only shows if that is the one
+        // you happened to leave the widget on.
+        //
+        // Staged against a scratch domain, not the real one. `select` and the bet setters write
+        // through as they are called, so composing a picture here would otherwise move the widget
+        // to the roulette table behind the player's back — which is exactly what it did.
+        if let flag = args.firstIndex(of: "--roulette"), flag + 1 < args.count {
+            let casino = Casino(defaults: scratchDefaults())
+            casino.select(.roulette)
+            // A table with several chips on it, which is what the felt is for.
+            casino.roulette.stage(
+                number: 17,
+                bets: [.straight(17): 5, .black: 10, .dozen(2): 5, .inside([1, 2, 4, 5]): 5],
+                stake: 5
+            )
+            render(
+                CasinoView(casino: casino, alwaysHovered: true, isStill: true),
                 to: args[flag + 1]
             )
             return true
@@ -37,6 +58,18 @@ enum OffscreenRender {
             render(
                 StatsView(ledger: .sample(endingOn: today), credits: 240, today: today,
                           onReset: {})
+                    .frame(width: 400)
+                    .background { Palette.felt },
+                to: args[flag + 1]
+            )
+            return true
+        }
+        // The same screen for the other table, which shows a different breakdown entirely.
+        if let flag = args.firstIndex(of: "--stats-roulette"), flag + 1 < args.count {
+            let today = Date()
+            render(
+                StatsView(ledger: .rouletteSample(endingOn: today), credits: 240,
+                          game: .roulette, today: today, onReset: {}, onSelect: { _ in })
                     .frame(width: 400)
                     .background { Palette.felt },
                 to: args[flag + 1]
@@ -83,6 +116,13 @@ enum OffscreenRender {
             .padding(10)
             .background(.black.opacity(0.9))
         }
+    }
+
+    /// A throwaway domain for renders that have to compose a state to photograph it.
+    private static func scratchDefaults() -> UserDefaults {
+        let suite = "DesktopCasino.offscreen.\(UUID().uuidString)"
+        UserDefaults().removePersistentDomain(forName: suite)
+        return UserDefaults(suiteName: suite) ?? .standard
     }
 
     private static func render(_ content: some View, to path: String) {

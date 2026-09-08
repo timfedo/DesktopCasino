@@ -14,7 +14,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class StatsWindowController {
-    private let machine: SlotMachine
+    private let casino: Casino
 
     /// Run after the window is shown, as insurance rather than a fix for anything observed.
     ///
@@ -37,8 +37,12 @@ final class StatsWindowController {
     /// Read by the widget's stats button, which stays lit while the window is up.
     private(set) var isOpen = false
 
-    init(machine: SlotMachine, didActivate: @escaping () -> Void) {
-        self.machine = machine
+    /// How many times the window has been opened. Only ever used as an identity for the content,
+    /// so it re-syncs to the widget's table on each open.
+    @ObservationIgnored private var openings = 0
+
+    init(casino: Casino, didActivate: @escaping () -> Void) {
+        self.casino = casino
         self.didActivate = didActivate
     }
 
@@ -67,6 +71,15 @@ final class StatsWindowController {
             forgetCloseObserver()
             existing.close()
             self.window = nil
+        }
+
+        // Counted before the window is built or re-shown, and handed to the content as an
+        // identity: it is what makes the screen land on the table the widget is currently at,
+        // every time, rather than only the first time it was opened. Assigning `rootView` rather
+        // than a fresh hosting view keeps the scroll position and costs a diff.
+        openings += 1
+        if let host = window?.contentView as? NSHostingView<StatsScreen> {
+            host.rootView = StatsScreen(casino: casino, opening: openings)
         }
 
         let window = self.window ?? makeWindow()
@@ -103,7 +116,9 @@ final class StatsWindowController {
         // somewhere else, and why the obvious flag for it is wrong.
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 340, height: 380)
-        window.contentView = NSHostingView(rootView: StatsScreen(machine: machine))
+        window.contentView = NSHostingView(
+            rootView: StatsScreen(casino: casino, opening: openings)
+        )
         window.setFrameAutosaveName("statsWindow")
         // Only when the autosave had nothing to restore, which leaves the frame at the origin.
         if window.frame.origin == .zero { window.center() }

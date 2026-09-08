@@ -3,7 +3,7 @@ import SwiftUI
 
 
 struct CasinoView: View {
-    let machine: SlotMachine
+    let casino: Casino
     /// Injected rather than looked up: scanning `NSApp.windows` per access ran once per drag
     /// frame, and it left `mode` with two sources of truth synced only on appear. Held weakly
     /// through a box, since the panel hosts this very view and would otherwise retain itself.
@@ -26,11 +26,22 @@ struct CasinoView: View {
     @State private var hovering = false
     @State private var modeRevision = 0
 
+    /// Fades the table in after a change. Its own state rather than a `transition`, because a
+    /// transition runs under the transaction that caused it, and the change itself is committed
+    /// without one. See `selectTable`.
+    @State private var tableFade: Double = 1
+    /// The height of the box the table sits in, animated to whatever the table inside needs.
+    /// `nil` until the first one has been measured.
+    @State private var tableHeight: CGFloat?
+
     /// Whether the window controls are showing: the pointer is over the card, or a render has
     /// asked for them. Derived rather than seeded into `hovering` from `onAppear`, because
     /// `ImageRenderer` never calls `onAppear` — the chrome was silently missing from every
     /// offscreen render.
     private var showsChrome: Bool { hovering || alwaysHovered }
+
+    /// The slot machine, which most of this file predates the roulette table in caring about.
+    private var machine: SlotMachine { casino.slots }
 
     private var panel: DesktopPanel? { panelRef.panel }
 
@@ -81,10 +92,10 @@ struct CasinoView: View {
     var body: some View {
         VStack(spacing: 11) {
             header
+            tablePicker
             credits
-            reelBox
-            outcomeLine
-            betPicker
+            table
+            stakePicker
             actionButton
         }
         // Height comes from the content, so this padding is the margin on every side. A fixed
@@ -121,6 +132,20 @@ struct CasinoView: View {
                 )
         }
         .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        // The two tables are different heights, so the window has to follow the card rather than
+        // the other way round. Measured here rather than read back off the hosting view: changing
+        // table is an `@Observable` mutation, and SwiftUI has not re-laid anything out by the time
+        // the button's action returns, so `fittingSize` would be a frame stale — for one frame the
+        // roulette table would be drawn into a slot machine's window and clipped.
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: CardHeightKey.self, value: proxy.size.height)
+            }
+        }
+        .onPreferenceChange(CardHeightKey.self) { [panelRef] height in
+            // SwiftUI delivers preference changes on the main actor as part of its update pass.
+            MainActor.assumeIsolated { panelRef.panel?.matchHeight(to: height) }
+        }
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .task(id: machine.spinCount) {
@@ -228,14 +253,162 @@ struct CasinoView: View {
         }
     }
 
+    /// Which table you are standing at. Directly above the credits, because the balance is the one
+    /// thing the two tables share — the picker changes the game underneath the number, not the
+    /// number.
+    ///
+    /// Locked mid-round: the stake is already down and the result is already scheduled, and
+    /// walking away from a bet you have paid for is not something a control should let you do by
+    /// accident.
+    private var tablePicker: some View {
+        HStack(spacing: 5) {
+            ForEach(Casino.Game.allCases, id: \.self) { game in
+                let selected = casino.game == game
+                Button {
+                    selectTable(game)
+                } label: {
+                    Text(game.title)
+                        .font(.system(size: 9, weight: .heavy))
+                        .tracking(1.3)
+                        .foregroundStyle(selected ? .black.opacity(0.85) : .white.opacity(0.55))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 22)
+                        .background(selected ? gold : .white.opacity(0.09),
+                                    in: .rect(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .disabled(casino.isBusy)
+                .help(game.help)
+            }
+        }
+        .opacity(casino.isBusy ? 0.45 : 1)
+        .animation(.easeOut(duration: 0.2), value: casino.isBusy)
+    }
+
+    /// Changes table in two parts: the layout instantly, and the new table fading in over it.
+    ///
+    /// Only the middle of the card animates. The chrome around it — the picker and credits above,
+    /// the stake chips and the gold button below — is left alone, and that is the whole point:
+    /// with the window anchored at its bottom edge, the chips and the button are already at a
+    /// fixed place on screen, so *not animating them* is what makes them genuinely static rather
+    /// than merely arriving somewhere on a curve.
+    ///
+    /// Animating the height instead was the obvious thing and is subtly worse. Everything above
+    /// the table has to travel with it, so a quarter of a second of the picker you just clicked
+    /// sliding out from under the pointer — smooth, coherent, and still the card moving when
+    /// nothing about changing table needs the card to move.
+    ///
+    /// Two transactions, in this order, both synchronous:
+    ///
+    /// 1. The model change and the fade reset, with animations off. The card resizes, the window
+    ///    follows in the same pass, and the new table is laid out but invisible.
+    /// 2. The fade back in. `tableFade` feeds an `opacity` and nothing else, so this animation has
+    ///    no geometry to reach: it cannot move anything, however long it runs.
+    private func selectTable(_ game: Casino.Game) {
+        guard game != casino.game, !casino.isBusy else { return }
+
+        // Both committed without an animation: the swap itself is instant, and the box the table
+        // sits in animates to the new table's height once it has been measured — see `table`.
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            tableFade = 0
+            casino.select(game)
+        }
+
+        // Deferred a turn so the blank above is committed first. Run in the same pass, the two
+        // assignments would cancel and nothing would fade.
+        Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.28)) { tableFade = 1 }
+        }
+    }
+
+    /// A spring with no bounce. A card resizing should not overshoot and come back, and the settle
+    /// of a bouncy one would have the window chasing it for longer than the movement is worth.
+    private static let tableChange: Animation = .smooth(duration: 0.34)
+
+    /// How far outside its box the table is allowed to draw: wider than the wheel's 16pt win glow
+    /// and the reels' 12pt one, both of which fall outside the frame they belong to.
+    private static let glowSlack: CGFloat = 26
+
+    /// The table, in a box whose height is animated to whatever the table inside it needs.
+    ///
+    /// The height is driven explicitly rather than left to layout, and it is driven through an
+    /// `Animatable` box rather than a plain `frame(height:)` fed an animated value. The difference
+    /// is the whole fix — see `TableBox`.
+    private var table: some View {
+        let measured = tableContent
+            // A new view per table, so the outgoing one is gone rather than fading out underneath.
+            // A true cross-fade would need both laid out at once, and they are 250pt apart in
+            // height — the card would have to be big enough for the taller of them throughout.
+            .id(casino.game)
+            // Ignores the height the box proposes, so what gets measured below is what the table
+            // actually wants rather than what it is currently being given.
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: TableHeightKey.self, value: proxy.size.height)
+                }
+            }
+            .opacity(tableFade)
+
+        return Group {
+            // Unconstrained until the first table has been measured, which happens once at launch.
+            if let tableHeight {
+                TableBox(height: tableHeight, slack: Self.glowSlack) { measured }
+            } else {
+                measured
+            }
+        }
+        .onPreferenceChange(TableHeightKey.self) { height in
+            MainActor.assumeIsolated { adopt(tableHeight: height) }
+        }
+    }
+
+    /// Takes the natural height of whichever table is now in the box, animating the box to it.
+    ///
+    /// The first one is adopted outright: there is nothing to animate from, and a card that grew
+    /// into place on launch would be a strange thing to watch.
+    private func adopt(tableHeight height: CGFloat) {
+        guard height > 0, height != tableHeight else { return }
+        guard tableHeight != nil else {
+            tableHeight = height
+            return
+        }
+        withAnimation(Self.tableChange) { tableHeight = height }
+    }
+
+    @ViewBuilder
+    private var tableContent: some View {
+        switch casino.game {
+        case .slots:
+            VStack(spacing: 11) {
+                reelBox
+                outcomeLine
+            }
+        case .roulette:
+            RouletteTable(roulette: casino.roulette, broke: casino.bank.isBroke)
+        }
+    }
+
+    private var stakePicker: some View {
+        StakePicker(
+            stake: casino.stake,
+            credits: casino.bank.credits,
+            locked: casino.isSpinning
+        ) {
+            casino.setStake($0)
+        }
+    }
+
     private var credits: some View {
         VStack(spacing: 1) {
-            Text("\(machine.credits)")
+            Text("\(casino.bank.credits)")
                 .font(.system(size: 34, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .contentTransition(.numericText())
-                .animation(.snappy(duration: 0.35), value: machine.credits)
+                .animation(.snappy(duration: 0.35), value: casino.bank.credits)
 
             Text("CREDITS")
                 .font(.system(size: 8, weight: .semibold))
@@ -289,37 +462,17 @@ struct CasinoView: View {
         .animation(.easeOut(duration: 0.2), value: machine.spinCount)
     }
 
-    private var betPicker: some View {
-        HStack(spacing: 5) {
-            ForEach(SlotMachine.betSizes, id: \.self) { size in
-                let selected = machine.bet == size
-                Button {
-                    machine.setBet(size)
-                } label: {
-                    Text("\(size)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(selected ? .black : .white.opacity(0.65))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 24)
-                        .background(selected ? gold : .white.opacity(0.09),
-                                    in: .rect(cornerRadius: 7))
-                }
-                .buttonStyle(.plain)
-                .disabled(machine.isSpinning || size > machine.credits)
-                .opacity(size > machine.credits ? 0.35 : 1)
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: machine.bet)
-    }
-
     private var actionButton: some View {
-        let broke = machine.credits < SlotMachine.betSizes[0]
+        let broke = casino.bank.isBroke
+        // Nothing staked is only reachable at the wheel, where clearing the felt is a thing you
+        // can do. Saying so beats a gold button that looks live and does nothing.
+        let unstaked = !broke && casino.wager == 0
+        let inert = casino.isSpinning || unstaked
+
         return Button {
-            if broke { machine.refill() } else { machine.spin() }
+            if broke { casino.refill() } else { casino.spin() }
         } label: {
-            Text(broke ? "REFILL +\(SlotMachine.startingBank)"
-                       : (machine.isSpinning ? "SPINNING…" : "SPIN  −\(machine.bet)"))
+            Text(label(broke: broke, unstaked: unstaked))
                 .font(.system(size: 13, weight: .heavy, design: .rounded))
                 .tracking(1.2)
                 .foregroundStyle(.black.opacity(0.85))
@@ -330,11 +483,21 @@ struct CasinoView: View {
                                    startPoint: .top, endPoint: .bottom),
                     in: .rect(cornerRadius: 11)
                 )
+                // Scoped to the label, for the same reason as the stake chips: on the button it
+                // also animated the button's own frame, and the button moves the height of a
+                // roulette felt when you change table.
+                .opacity(inert ? 0.45 : 1)
+                .animation(.easeOut(duration: 0.2), value: inert)
         }
         .buttonStyle(.plain)
-        .disabled(machine.isSpinning)
-        .opacity(machine.isSpinning ? 0.45 : 1)
-        .animation(.easeOut(duration: 0.2), value: machine.isSpinning)
+        .disabled(inert)
+    }
+
+    private func label(broke: Bool, unstaked: Bool) -> String {
+        if broke { return "REFILL +\(Bank.startingBank)" }
+        if casino.isSpinning { return "SPINNING…" }
+        if unstaked { return "PLACE A BET" }
+        return "SPIN  −\(casino.wager)"
     }
 
     // MARK: - Derived
@@ -383,4 +546,60 @@ struct CasinoView: View {
 final class PanelRef {
     weak var panel: DesktopPanel?
     init(_ panel: DesktopPanel? = nil) { self.panel = panel }
+}
+
+/// The box the table sits in, re-laid out at the interpolated height on every frame.
+///
+/// A plain `frame(height:)` fed an animated value is not enough, and the difference is the whole
+/// reason this type exists. That interpolates what is *drawn*, but the height the surrounding
+/// layout resolves — and therefore the height the card reports and the window matches — goes
+/// straight to the target. The result was a window that resized in one step while the table
+/// animated inside it: growing, it sprang to full size and the table filled in afterwards;
+/// shrinking, it cropped to the final size immediately and the table animated inside the crop.
+///
+/// Driving the height through `animatableData` re-runs this body every frame, so each frame is a
+/// real layout at the interpolated height. The card then measures what is actually on screen and
+/// the window follows it the whole way. Same technique as `ReelView`, and for the same reason:
+/// SwiftUI hands an `Animatable` view the in-between values, and nothing else does.
+///
+/// The conformance is main-actor isolated because SwiftUI only ever drives `animatableData` from
+/// the render loop on the main actor.
+private struct TableBox<Content: View>: View, @MainActor Animatable {
+    var height: CGFloat
+    var slack: CGFloat
+    @ViewBuilder var content: Content
+
+    var animatableData: CGFloat {
+        get { height }
+        set { height = newValue }
+    }
+
+    var body: some View {
+        content
+            .frame(height: max(height, 0), alignment: .top)
+            // Clipped with slack rather than to the bounds. Growing, the table is at its full
+            // height inside a box that is still short, and without a clip it would spill over the
+            // stake chips; clipped exactly, the win glow around the wheel and the reels — which
+            // are drawn outside their own frames — would be sliced off at rest.
+            .clipShape(Rectangle().inset(by: -slack))
+    }
+}
+
+/// The natural height of whichever table is on the card, reported out of the layout so the box
+/// around it can be animated to match.
+private struct TableHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// The card's laid-out height, reported out of the layout so the window can match it.
+private struct CardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
 }
