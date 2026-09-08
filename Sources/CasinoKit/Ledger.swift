@@ -56,8 +56,14 @@ public struct Ledger: Equatable, Sendable {
     /// Three-of-a-kind counts, keyed by symbol name.
     public internal(set) var triples: [String: Int] = [:]
 
+    /// Roulette pockets the ball has landed in, keyed by number. Empty on a slot machine's ledger,
+    /// which is what tells the stats screen which breakdown it is looking at.
+    public internal(set) var pockets: [Int: Int] = [:]
+
     public internal(set) var bestWin = 0
     public internal(set) var bestWinSymbol: String?
+    /// What the best win was riding on, for a table where that is a bet rather than a symbol.
+    public internal(set) var bestWinBet: String?
     public internal(set) var bestWinAt: Date?
 
     /// High-water mark of the bank, sampled after each spin resolves and after each refill.
@@ -78,15 +84,27 @@ public struct Ledger: Equatable, Sendable {
 
     // MARK: - Recording
 
-    /// Files one resolved spin.
+    /// What kind of round produced the figures — the part of a record that is not just money.
     ///
-    /// `bank` is the balance *after* the payout landed, so the high-water mark counts the spin
-    /// that set it. `date` and `calendar` are injectable so tests can place a spin on a chosen
+    /// The counters either side of this are the same for both tables, which is why there is one
+    /// `Ledger` type and not two: a spin and a coup are both a stake, a payout and a date. Only
+    /// the breakdown differs, and it differs here.
+    public enum Detail: Equatable, Sendable {
+        case slots(SlotMachine.Outcome)
+        /// The pocket, and whichever of the chips on the table returned the most — which is what
+        /// "biggest payout" on the stats screen is asking about. `nil` when none of them won.
+        case roulette(number: Int, winningBet: RouletteBet?)
+    }
+
+    /// Files one resolved round.
+    ///
+    /// `bank` is the balance *after* the payout landed, so the high-water mark counts the round
+    /// that set it. `date` and `calendar` are injectable so tests can place a round on a chosen
     /// day without waiting for one.
     public mutating func record(
         stake: Int,
         payout: Int,
-        outcome: SlotMachine.Outcome,
+        detail: Detail,
         bank: Int,
         at date: Date = Date(),
         calendar: Calendar = .current
@@ -103,10 +121,15 @@ public struct Ledger: Equatable, Sendable {
         days[key] = day
         prune()
 
-        switch outcome {
-        case .pair: pairs += 1
-        case .triple(let symbol): triples[symbol.name, default: 0] += 1
-        default: break
+        switch detail {
+        case .slots(let outcome):
+            switch outcome {
+            case .pair: pairs += 1
+            case .triple(let symbol): triples[symbol.name, default: 0] += 1
+            default: break
+            }
+        case .roulette(let number, _):
+            pockets[number, default: 0] += 1
         }
 
         if payout > stake {
@@ -123,13 +146,33 @@ public struct Ledger: Equatable, Sendable {
 
         if payout > bestWin {
             bestWin = payout
-            bestWinSymbol = outcome.symbol?.name
+            switch detail {
+            case .slots(let outcome):
+                bestWinSymbol = outcome.symbol?.name
+                bestWinBet = nil
+            case .roulette(_, let bet):
+                bestWinSymbol = nil
+                bestWinBet = bet.map { $0.spread.isEmpty ? $0.label : "\($0.label) \($0.spread)" }
+            }
             bestWinAt = date
         }
 
         peakBank = max(peakBank, bank)
         if firstSpinAt == nil { firstSpinAt = date }
         lastSpinAt = date
+    }
+
+    /// The slot machine's spelling, which is what most callers and every existing test say.
+    public mutating func record(
+        stake: Int,
+        payout: Int,
+        outcome: SlotMachine.Outcome,
+        bank: Int,
+        at date: Date = Date(),
+        calendar: Calendar = .current
+    ) {
+        record(stake: stake, payout: payout, detail: .slots(outcome), bank: bank,
+               at: date, calendar: calendar)
     }
 
     public mutating func recordRefill(bank: Int) {
@@ -193,6 +236,34 @@ public struct Ledger: Equatable, Sendable {
     /// `pushes`, which split pairs across both — 1x pairs push, 2x pairs gain.
     public var blanks: Int { max(0, spins - pairs - tripleTotal) }
 
+    // MARK: - Roulette
+
+    /// Rounds filed against a wheel. Zero on a slot machine's ledger, which is how the stats
+    /// screen knows which breakdown to draw.
+    public var coups: Int { pockets.values.reduce(0, +) }
+
+    public func pocketHits(_ color: PocketColor) -> Int {
+        pockets.reduce(0) { total, entry in
+            total + (RouletteWheel.color(of: entry.key) == color ? entry.value : 0)
+        }
+    }
+
+    /// The number that has come up most often. Ties break to the lower number so the answer is
+    /// stable between reads — a "hottest number" that flickered between two equals would look
+    /// like a bug in the counting rather than a coincidence in the play.
+    public var hottestPocket: (number: Int, hits: Int)? {
+        pockets.filter { $0.value > 0 }
+            .map { (number: $0.key, hits: $0.value) }
+            .max { ($0.hits, -$0.number) < ($1.hits, -$1.number) }
+    }
+
+    /// How lopsided the wheel has been: the most-hit number's share, against the 1/37 it should
+    /// tend to. Meaningless over a handful of coups, which is why the screen captions it.
+    public var hottestShare: Double {
+        guard coups > 0, let hottest = hottestPocket else { return 0 }
+        return Double(hottest.hits) / Double(coups)
+    }
+
     // MARK: - Day keys
 
     public static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
@@ -232,8 +303,8 @@ public struct Ledger: Equatable, Sendable {
 /// be indistinguishable from "no history", and would quietly wipe somebody's record on upgrade.
 extension Ledger: Codable {
     private enum CodingKeys: String, CodingKey {
-        case days, spins, wagered, won, gains, pushes, pairs, triples
-        case bestWin, bestWinSymbol, bestWinAt
+        case days, spins, wagered, won, gains, pushes, pairs, triples, pockets
+        case bestWin, bestWinSymbol, bestWinBet, bestWinAt
         case peakBank, refills
         case winStreak, longestWinStreak, drySpell, longestDrySpell
         case firstSpinAt, lastSpinAt
@@ -250,8 +321,10 @@ extension Ledger: Codable {
         pushes = try box.decodeIfPresent(Int.self, forKey: .pushes) ?? 0
         pairs = try box.decodeIfPresent(Int.self, forKey: .pairs) ?? 0
         triples = try box.decodeIfPresent([String: Int].self, forKey: .triples) ?? [:]
+        pockets = try box.decodeIfPresent([Int: Int].self, forKey: .pockets) ?? [:]
         bestWin = try box.decodeIfPresent(Int.self, forKey: .bestWin) ?? 0
         bestWinSymbol = try box.decodeIfPresent(String.self, forKey: .bestWinSymbol)
+        bestWinBet = try box.decodeIfPresent(String.self, forKey: .bestWinBet)
         bestWinAt = try box.decodeIfPresent(Date.self, forKey: .bestWinAt)
         peakBank = try box.decodeIfPresent(Int.self, forKey: .peakBank) ?? 0
         refills = try box.decodeIfPresent(Int.self, forKey: .refills) ?? 0
@@ -315,6 +388,60 @@ extension Ledger {
                 bank += payout - stake
                 ledger.record(stake: stake, payout: payout, outcome: outcome, bank: bank,
                               at: day, calendar: calendar)
+            }
+        }
+        return ledger
+    }
+
+    /// The same idea for the wheel: a deterministic fortnight played against the real pockets and
+    /// the real payout rule, for the `--stats` render and the roulette stats snapshot.
+    ///
+    /// Bets are drawn from the whole felt rather than only the outside, so the pocket grid fills
+    /// in unevenly and the best win is something worth showing.
+    public static func rouletteSample(
+        endingOn today: Date, calendar: Calendar = .current, seed: UInt64 = 0x0B0E_51DE
+    ) -> Ledger {
+        var rng = SplitMix64(seed: seed)
+        var ledger = Ledger()
+        var bank = Bank.startingBank
+        let felt = RouletteBet.outsideBets + RouletteBet.dozens + RouletteBet.columns
+            + RouletteLayout.allInsideBets.map(RouletteBet.inside)
+
+        for back in (0..<12).reversed() {
+            guard back != 5,
+                  let day = calendar.date(byAdding: .day, value: -back, to: today)
+            else { continue }
+
+            for _ in 0..<Int.random(in: 14...40, using: &rng) {
+                // Two or three chips down at once, like a real table, so the sample exercises the
+                // multi-bet arithmetic rather than only the one-chip case.
+                var table: [RouletteBet: Int] = [:]
+                for _ in 0..<Int.random(in: 1...3, using: &rng) {
+                    let chip = Bank.betSizes.randomElement(using: &rng) ?? 5
+                    table[felt.randomElement(using: &rng) ?? .red, default: 0] += chip
+                }
+                let staked = table.values.reduce(0, +)
+                if bank < staked {
+                    bank += Bank.startingBank
+                    ledger.recordRefill(bank: bank)
+                }
+
+                let number = RouletteWheel.order[
+                    Int.random(in: 0..<RouletteWheel.pockets, using: &rng)
+                ]
+                var payout = 0
+                var best: RouletteBet?
+                var bestReturn = 0
+                for (bet, amount) in table where bet.wins(number) {
+                    let returned = amount * bet.payout
+                    payout += returned
+                    if returned > bestReturn { bestReturn = returned; best = bet }
+                }
+
+                bank += payout - staked
+                ledger.record(stake: staked, payout: payout,
+                              detail: .roulette(number: number, winningBet: best),
+                              bank: bank, at: day, calendar: calendar)
             }
         }
         return ledger

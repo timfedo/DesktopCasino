@@ -69,7 +69,11 @@ struct SlotMachineTests {
         // Poll rather than sleeping a fixed interval. Resolution is scheduled ~2.3s out on the
         // main actor, and the snapshot tests run in parallel doing heavy main-actor rendering —
         // a fixed 3s wait raced that contention and failed intermittently.
-        let deadline = Date().addingTimeInterval(30)
+        //
+        // The deadline is a backstop against hanging, not a timing assertion, so it is generous:
+        // 30s was enough until the suite grew a felt and a 220pt wheel to render, and then it
+        // started tripping under load. A spin that genuinely never resolves still fails.
+        let deadline = Date().addingTimeInterval(120)
         while machine.isSpinning, Date() < deadline {
             try await Task.sleep(for: .milliseconds(25))
         }
@@ -214,7 +218,7 @@ struct SlotMachineTests {
 
     /// Waits for a spin to resolve. See `netReconciles` for why this polls.
     private static func settle(_ machine: SlotMachine) async throws {
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = Date().addingTimeInterval(120)
         while machine.isSpinning, Date() < deadline {
             try await Task.sleep(for: .milliseconds(25))
         }

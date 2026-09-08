@@ -21,6 +21,20 @@ public enum Palette {
         }
     }
 
+    /// Roulette pockets. Deeper than `red`, which is the slot machine's lit-up seven: a wheel is
+    /// lacquered wood inside a gold rim, and the brighter red flared against it.
+    public static let pocketRed = Color(red: 0.79, green: 0.13, blue: 0.17)
+    public static let pocketBlack = Color(red: 0.09, green: 0.10, blue: 0.12)
+    public static let pocketGreen = Color(red: 0.10, green: 0.52, blue: 0.33)
+
+    public static func pocket(_ color: PocketColor) -> Color {
+        switch color {
+        case .red: pocketRed
+        case .black: pocketBlack
+        case .green: pocketGreen
+        }
+    }
+
     /// The widget's own backdrop, shared so the app icon matches it exactly.
     public static func card(opacity: Double = 1) -> LinearGradient {
         LinearGradient(

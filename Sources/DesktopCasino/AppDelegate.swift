@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let machine = SlotMachine()
+    private let casino = Casino()
     private var panel: DesktopPanel?
     private var stats: StatsWindowController?
 
@@ -12,11 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panelRef = PanelRef()
         // Reaches the panel through the same weak box the view uses, so opening the stats window
         // cannot be what keeps the panel alive.
-        let stats = StatsWindowController(machine: machine) { panelRef.panel?.reassertPlacement() }
+        let stats = StatsWindowController(casino: casino) { panelRef.panel?.reassertPlacement() }
         self.stats = stats
 
         let panel = DesktopPanel(
-            content: CasinoView(machine: machine, panelRef: panelRef, stats: stats)
+            content: CasinoView(casino: casino, panelRef: panelRef, stats: stats)
         )
         panelRef.panel = panel
         panel.restorePosition()
@@ -45,9 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         panel?.savePosition()
-        // Credits are debited when a spin starts and only credited back when it resolves ~2.3s
-        // later. Quitting inside that window would otherwise persist the debit with no payout.
-        machine.refundUnresolvedSpin()
-        machine.save()
+        // Credits are debited when a spin starts and only credited back when it resolves a couple
+        // of seconds later. Quitting inside that window would otherwise persist the debit with no
+        // payout — on either table.
+        casino.refundUnresolvedSpin()
+        casino.save()
     }
 }

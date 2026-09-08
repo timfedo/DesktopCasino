@@ -11,7 +11,9 @@ public final class SlotMachine {
         public var spinTarget: Double = 0
     }
 
-    public enum Outcome: Equatable {
+    /// `Sendable` because it is a value carrying nothing but a `Symbol`, and `Ledger.Detail` —
+    /// which is a plain value type outside the main actor — has to be able to hold one.
+    public enum Outcome: Equatable, Sendable {
         case idle
         case spinning
         case nothing
@@ -33,16 +35,29 @@ public final class SlotMachine {
         }
     }
 
-    public static let betSizes = [1, 5, 10, 25]
-    public static let startingBank = 100
+    /// Aliases, not copies. Stakes and the starting balance belong to the `Bank` now that the
+    /// roulette table draws on the same purse; these keep the names the call sites already use.
+    public static let betSizes = Bank.betSizes
+    public static let startingBank = Bank.startingBank
 
-    private static let creditsKey = "credits"
     private static let betKey = "bet"
     private static let ledgerKey = "ledger"
 
-    public private(set) var credits: Int
+    /// Read through to the shared bank rather than held here. Both tables spend the same credits,
+    /// and a second copy would drift the moment the other one was played.
+    public var credits: Int { bank.credits }
+
     public private(set) var reels = [ReelState](repeating: ReelState(), count: 3)
-    public private(set) var outcome: Outcome = .idle
+
+    /// `.broke` is derived rather than stored: the balance is shared with the roulette table, so
+    /// it can cross the minimum stake while this machine is not the one being played, and a
+    /// stored flag would still be saying "out of credits" over a bank someone else refilled.
+    public var outcome: Outcome {
+        if !isSpinning, bank.isBroke { return .broke }
+        return resolvedOutcome
+    }
+
+    private var resolvedOutcome: Outcome = .idle
     public private(set) var lastWin = 0
     /// What the resolved spin actually cost. `bet` can be downshifted after a spin resolves, so
     /// comparing a payout against it would misjudge whether the spin gained anything.
@@ -50,12 +65,14 @@ public final class SlotMachine {
     public private(set) var isSpinning = false
     public private(set) var bet: Int
 
-    /// The persistent play record behind the stats window.
+    /// The persistent play record behind the stats window. The roulette table keeps its own —
+    /// same shape, different key — so the two games' histories never blur into one another.
     public private(set) var ledger: Ledger
     /// Totals since launch. Deliberately not persisted: "this session" means this run of the app,
     /// so it starts empty every time and sits next to today and all time in the stats window.
     public private(set) var session = Ledger.Day()
 
+    private let bank: Bank
     private let defaults: UserDefaults
 
     /// Bumped on every resolved spin so the view can retrigger its win animation
@@ -63,11 +80,11 @@ public final class SlotMachine {
     public private(set) var spinCount = 0
 
     /// `defaults` is injectable so tests can run against a scratch domain instead of polluting
-    /// the real one.
-    public init(defaults: UserDefaults = .standard) {
+    /// the real one. `bank` is injectable so the roulette table can share this one's purse;
+    /// left out, the machine opens its own against the same defaults.
+    public init(bank: Bank? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let stored = defaults.object(forKey: Self.creditsKey) as? Int
-        credits = stored ?? Self.startingBank
+        self.bank = bank ?? Bank(defaults: defaults)
         bet = defaults.object(forKey: Self.betKey) as? Int ?? Self.betSizes[1]
 
         // A ledger that will not decode is treated as no ledger. Refusing to launch, or throwing
@@ -91,12 +108,11 @@ public final class SlotMachine {
                                  spinStart: Double(stop),
                                  spinTarget: Double(stop))
         }
-        if credits < Self.betSizes[0] { outcome = .broke }
     }
 
     // MARK: - Play
 
-    public var canSpin: Bool { !isSpinning && credits >= bet }
+    public var canSpin: Bool { !isSpinning && bank.canAfford(bet) }
 
     public func setBet(_ value: Int) {
         guard !isSpinning, Self.betSizes.contains(value) else { return }
@@ -104,13 +120,27 @@ public final class SlotMachine {
         defaults.set(bet, forKey: Self.betKey)
     }
 
+    /// Tops the shared bank up and files the refill here.
+    ///
+    /// Filed on *this* ledger rather than on both, now that the balance is shared: a refill is one
+    /// event, and counting it at each table would report twice as many as happened. `Casino` routes
+    /// it to whichever table you were standing at when the bank ran out.
     public func refill() {
         guard !isSpinning else { return }
-        credits += Self.startingBank
-        lastWin = 0
-        outcome = .idle
+        bank.refill()
         ledger.recordRefill(bank: credits)
+        reset()
         save()
+    }
+
+    /// Clears the last result without touching the balance or the record. Used when the bank is
+    /// topped up from the other table, so the machine is not still showing a spin nobody is
+    /// looking at.
+    public func reset() {
+        guard !isSpinning else { return }
+        lastWin = 0
+        lastStake = 0
+        resolvedOutcome = .idle
     }
 
     /// Clears the play record without touching the bank — the ledger is a diary, not currency.
@@ -124,12 +154,11 @@ public final class SlotMachine {
     }
 
     public func spin() {
-        guard canSpin else { return }
+        guard !isSpinning, bank.withdraw(bet) else { return }
 
         isSpinning = true
-        outcome = .spinning
+        resolvedOutcome = .spinning
         lastWin = 0
-        credits -= bet
 
         let stops = Reel.strip.count
         var landings: [Int] = []
@@ -171,24 +200,23 @@ public final class SlotMachine {
     private func resolve(_ landings: [Int]) {
         let stake = bet
         let (result, payout) = Self.score(landings, stake: stake)
-        outcome = result
+        resolvedOutcome = result
 
-        credits += payout
+        bank.deposit(payout)
         lastWin = payout
         lastStake = stake
         isSpinning = false
         spinCount += 1
 
-        // Filed with the scored outcome rather than `outcome`, which `.broke` is about to
-        // overwrite, and with the post-payout balance so the high-water mark counts the spin
-        // that set it.
+        // Filed with the scored outcome rather than `outcome`, which derives `.broke` from a
+        // balance the payout has already moved, and with the post-payout balance so the
+        // high-water mark counts the spin that set it.
         ledger.record(stake: stake, payout: payout, outcome: result, bank: credits)
         session.spins += 1
         session.wagered += stake
         session.won += payout
 
-        if credits < Self.betSizes[0] { outcome = .broke }
-        if bet > credits, let affordable = Self.betSizes.last(where: { $0 <= credits }) {
+        if !bank.canAfford(bet), let affordable = bank.largestAffordableStake() {
             bet = affordable
         }
         save()
@@ -223,13 +251,13 @@ public final class SlotMachine {
     /// so quitting mid-spin would otherwise persist the debit with no payout.
     public func refundUnresolvedSpin() {
         guard isSpinning else { return }
-        credits += bet
+        bank.deposit(bet)
         isSpinning = false
-        outcome = .idle
+        resolvedOutcome = .idle
     }
 
     public func save() {
-        defaults.set(credits, forKey: Self.creditsKey)
+        bank.save()
         defaults.set(bet, forKey: Self.betKey)
         if let encoded = try? JSONEncoder().encode(ledger) {
             defaults.set(encoded, forKey: Self.ledgerKey)
@@ -250,7 +278,7 @@ public final class SlotMachine {
     public func stage(landings: [Int], credits: Int, bet: Int, spinning: Bool = false) {
         precondition(landings.count == reels.count, "stage wants one landing per reel")
 
-        self.credits = credits
+        bank.stage(credits: credits)
         self.bet = Self.betSizes.contains(bet) ? bet : Self.betSizes[1]
 
         for i in reels.indices {
@@ -271,7 +299,7 @@ public final class SlotMachine {
         }
 
         guard !spinning else {
-            outcome = .spinning
+            resolvedOutcome = .spinning
             lastWin = 0
             lastStake = 0
             isSpinning = true
@@ -283,7 +311,8 @@ public final class SlotMachine {
         lastStake = self.bet
         isSpinning = false
         spinCount += 1
-        outcome = credits < Self.betSizes[0] ? .broke : result
+        // `.broke` is derived from the balance, so staging one is a matter of staging the credits.
+        resolvedOutcome = result
     }
 
     /// How far through its travel each reel is in a staged spin: left nearly home, right barely

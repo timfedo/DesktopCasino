@@ -20,7 +20,10 @@ import SwiftUI
 /// Not visible inside a fullscreen Space — a fullscreen app owns its Space.
 @MainActor
 final class DesktopPanel: NSPanel {
-    static let size = CGSize(width: 264, height: 372)
+    /// Width is the real constant; height is only the starting guess before the card measures
+    /// itself. Widened from 264 when the roulette felt arrived — a betting layout is twelve
+    /// columns of numbers wide whatever else it is, and at 264 the cells were 14pt.
+    static let size = CGSize(width: 320, height: 372)
 
     private static let originKey = "panelOrigin"
     private static let modeKey = "windowMode"
@@ -56,7 +59,19 @@ final class DesktopPanel: NSPanel {
         isReleasedWhenClosed = false
         animationBehavior = .none
 
-        let host = FirstMouseHostingView(rootView: content)
+        // Pinned to the top of the window rather than left to centre itself in it.
+        //
+        // The card's height is fractional — text and spacings do not land on whole points — while
+        // a window's is not, so there is always up to a point of slack between them. Centred, that
+        // slack is split, and the half above the card changes as the fraction does: during a
+        // resize the card wobbled up and down by a fraction of a point on every frame. Pinned, the
+        // slack all falls below the card, where it is transparent and under a rounded corner.
+        //
+        // It also matches which edge `matchHeight` holds, so the card and its window agree about
+        // where the top is.
+        let host = FirstMouseHostingView(
+            rootView: content.frame(maxHeight: .infinity, alignment: .top)
+        )
         host.frame = NSRect(origin: .zero, size: Self.size)
         host.autoresizingMask = [.width, .height]
         contentView = host
@@ -306,6 +321,63 @@ final class DesktopPanel: NSPanel {
     }
 
     // MARK: - Placement
+
+    /// Follows the card's height, which changes when you change tables — the roulette wheel and its
+    /// felt are a good deal taller than three reels.
+    ///
+    /// The **top-left corner stays put**, so the card opens downward and closes back up. That keeps
+    /// the header, the table picker and the credits where they were — the picker especially, since
+    /// it is the thing you just clicked and having it leap out from under the pointer is the whole
+    /// reason to care which edge is anchored.
+    ///
+    /// AppKit measures from the bottom, so holding the top means moving the origin down by exactly
+    /// as much as the height grew. `clampToScreen` picks up the case where there is not that much
+    /// room below — parked at the bottom of the screen, which is where the widget starts, the card
+    /// opens down until it reaches the edge and is then pushed up the rest of the way.
+    func matchHeight(to height: CGFloat) {
+        let target = height.rounded(.up)
+        guard target > 0, abs(frame.height - target) > 0.5 else { return }
+
+        let top = frame.maxY
+        let left = frame.origin.x
+        setContentSize(NSSize(width: Self.size.width, height: target))
+        setFrameOrigin(NSPoint(x: left, y: top - target))
+        // Persisted only when the clamp actually moved the window. The stored origin is the
+        // player's, chosen by dragging, and a resize that stayed put has nothing to add to it.
+        if clampToScreen() { savePosition() }
+        if mode == .widget { pinBelowWindows() }
+    }
+
+    /// Nudges the window back inside its screen, for when a resize left it overhanging. Reports
+    /// whether it had to move.
+    @discardableResult
+    func clampToScreen() -> Bool {
+        guard let area = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
+            return false
+        }
+        let origin = Self.clamped(origin: frame.origin, size: frame.size, in: area)
+        guard origin != frame.origin else { return false }
+        setFrameOrigin(origin)
+        return true
+    }
+
+    /// Where a window of `size` belongs, given where it is now and what it has to fit inside.
+    ///
+    /// Pure, and separated from the window so the awkward case can be tested: a card taller than
+    /// the visible area. Clamping that between `minY` and `maxY - height` is a range with its
+    /// bounds the wrong way round, which traps rather than misplaces the window. When it cannot
+    /// fit, the top-left corner wins — that is the end with the close button on it, and a widget
+    /// you cannot quit is worse than one you cannot see all of.
+    static func clamped(origin: NSPoint, size: NSSize, in area: NSRect) -> NSPoint {
+        let x = size.width > area.width
+            ? area.minX
+            : min(max(origin.x, area.minX), area.maxX - size.width)
+        // AppKit's y grows upward, so the top edge is `maxY - height`.
+        let y = size.height > area.height
+            ? area.maxY - size.height
+            : min(max(origin.y, area.minY), area.maxY - size.height)
+        return NSPoint(x: x, y: y)
+    }
 
     func restorePosition() {
         if let stored = UserDefaults.standard.string(forKey: Self.originKey) {
